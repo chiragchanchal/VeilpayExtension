@@ -1,0 +1,372 @@
+/**
+ * Solana SystemProgram transfer — build, sign, and serialize without
+ * @solana/web3.js.
+ *
+ * Solana transactions use a compact wire format:
+ *   [signatures] + message
+ *
+ * The message:
+ *   [header: 3 bytes] + [account keys: compact-u16 prefixed] +
+ *   [recent blockhash: 32 bytes] + [instructions: compact-u16 prefixed]
+ *
+ * Each instruction:
+ *   [programIdIndex: 1 byte] + [account indices: compact-u16 prefixed] +
+ *   [data: compact-u16 prefixed]
+ *
+ * Everything here is pure; the caller fetches the recent blockhash from the
+ * RPC and provides the raw private key from the vault.
+ */
+
+import { base58 } from '@scure/base';
+import { ed25519 } from '@noble/curves/ed25519';
+import { sha256 } from '@noble/hashes/sha256';
+
+/** Base58-encoded 32-byte public key. */
+export interface SolanaAddress {
+  address: string;
+  /** Raw bytes for the wire format. */
+  pubkey: Uint8Array;
+}
+
+/** An unsigned Solana transfer. */
+export interface UnsignedSolanaTransfer {
+  /** Base58-encoded sender. */
+  from: string;
+  /** Base58-encoded recipient. */
+  to: string;
+  /** Amount in lamports (10^-9 SOL). */
+  lamports: bigint;
+  /** 32-byte recent blockhash from RPC. */
+  blockhash: Uint8Array;
+}
+
+/** A fully signed, broadcast-ready Solana transaction. */
+export interface SignedSolanaTransaction {
+  /** Base64-encoded transaction for `sendTransaction` RPC. */
+  raw: string;
+  /** The message hash that was signed (for diagnostics). */
+  signingHash: string;
+  /** Recovered sender address. */
+  from: string;
+}
+
+// The SystemProgram ID is the all-zero pubkey (32 bytes).
+const SYSTEM_PROGRAM: Uint8Array = new Uint8Array(32);
+
+// ---------------------------------------------------------------------------
+// Compact-u16 encoding (Solana's multi-byte length prefix)
+// ---------------------------------------------------------------------------
+
+function encodeCompactU16(value: number): Uint8Array {
+  if (value < 0 || value > 0x1fffff || !Number.isInteger(value)) {
+    throw new RangeError(`Compact-u16 value out of range: ${value}`);
+  }
+  if (value <= 0x7f) {
+    return new Uint8Array([value]);
+  }
+  if (value <= 0x3fff) {
+    return new Uint8Array([(value & 0x7f) | 0x80, value >> 7]);
+  }
+  return new Uint8Array([
+    (value & 0x7f) | 0x80,
+    ((value >> 7) & 0x7f) | 0x80,
+    value >> 14,
+  ]);
+}
+
+// ---------------------------------------------------------------------------
+// Address parsing
+// ---------------------------------------------------------------------------
+
+function parseAddress(address: string): Uint8Array {
+  const bytes = base58.decode(address);
+  if (bytes.length !== 32) {
+    throw new Error(`Solana address must be 32 bytes, got ${bytes.length}.`);
+  }
+  return bytes;
+}
+
+// ---------------------------------------------------------------------------
+// Transaction message building
+// ---------------------------------------------------------------------------
+
+/**
+ * Builds the unsigned Solana transaction message.
+ *
+ * The message format is:
+ *   [numRequiredSignatures: 1] [numReadonlySignedAccounts: 1]
+ *   [numReadonlyUnsignedAccounts: 1]
+ *   [compact-u16 accountKeyCount] [accountKeys...]
+ *   [recentBlockhash: 32 bytes]
+ *   [compact-u16 instructionCount] [instructions...]
+ */
+function buildMessage(
+  fromPubkey: Uint8Array,
+  toPubkey: Uint8Array,
+  lamports: bigint,
+  blockhash: Uint8Array,
+): Uint8Array {
+  const header = new Uint8Array([1, 0, 0]); // 1 signer, 0 readonly-signed, 0 readonly-unsigned
+
+  // Account keys: feePayer (signer), SystemProgram, destination
+  const accountKeys = [fromPubkey, SYSTEM_PROGRAM, toPubkey];
+  const accountKeysLen = encodeCompactU16(accountKeys.length);
+  const accountKeysFlat = concat(accountKeys);
+
+  // Instruction: SystemProgram.transfer
+  // programIdIndex = 1 (SystemProgram is at index 1)
+  // accounts = [0, 2] (feePayer at 0, destination at 2)
+  // data = [2, lamports as 8-byte LE]
+  const lamportsLE = toLE64(lamports);
+  const instructionData = new Uint8Array([2, ...lamportsLE]);
+  const instruction = encodeInstruction(1, [0, 2], instructionData);
+
+  const instructionsLen = encodeCompactU16(1);
+
+  // Assemble the message
+  const parts = [
+    header,
+    accountKeysLen,
+    accountKeysFlat,
+    blockhash,
+    instructionsLen,
+    instruction,
+  ];
+
+  return concat(parts);
+}
+
+function encodeInstruction(
+  programIdIndex: number,
+  accountIndices: number[],
+  data: Uint8Array,
+): Uint8Array {
+  const indicesPrefix = encodeCompactU16(accountIndices.length);
+  const indicesFlat = new Uint8Array(accountIndices.length);
+  for (let i = 0; i < accountIndices.length; i += 1) {
+    indicesFlat[i] = accountIndices[i] ?? 0;
+  }
+  const dataPrefix = encodeCompactU16(data.length);
+
+  return concat([
+    new Uint8Array([programIdIndex]),
+    indicesPrefix,
+    indicesFlat,
+    dataPrefix,
+    data,
+  ]);
+}
+
+/**
+ * Signs a Solana transfer and returns the broadcast-ready base64 string.
+ *
+ * Signing uses ed25519 on the SHA-256 hash of the message, per the Solana
+ * specification. The 64-byte signature is prepended to the message.
+ */
+export function signSolanaTransfer(
+  tx: UnsignedSolanaTransfer,
+  privateKey: Uint8Array,
+): SignedSolanaTransaction {
+  if (privateKey.length !== 32) {
+    throw new Error(`Solana private key must be 32 bytes, got ${privateKey.length}.`);
+  }
+
+  const fromPubkey = parseAddress(tx.from);
+  const toPubkey = parseAddress(tx.to);
+
+  const message = buildMessage(fromPubkey, toPubkey, tx.lamports, tx.blockhash);
+  const messageHash = sha256(message);
+  const signature = ed25519.sign(messageHash, privateKey);
+
+  // Solana wire format: [compact-u16 signature count] [signatures...] [message]
+  // For a single signature: [1] [64 bytes signature] [message]
+  const sigCount = new Uint8Array([1]);
+  const raw = concat([sigCount, signature, message]);
+
+  const from = base58.encode(fromPubkey);
+
+  return {
+    raw: btoa(String.fromCharCode(...raw)),
+    signingHash: bytesToHex(messageHash),
+    from,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function toLE64(value: bigint): Uint8Array {
+  const out = new Uint8Array(8);
+  for (let i = 0; i < 8; i += 1) {
+    out[i] = Number(value & 0xffn);
+    value >>= 8n;
+  }
+  return out;
+}
+
+/**
+ * Reads a compact-u16 value at `offset`, returning the value and the number of
+ * bytes consumed (1–3). Throws when the input ends mid-prefix.
+ */
+function decodeCompactU16(data: Uint8Array, offset: number): { value: number; consumed: number } {
+  const first = data[offset];
+  if (first === undefined) {
+    throw new Error('Solana transaction: truncated compact-u16.');
+  }
+  if ((first & 0x80) === 0) {
+    return { value: first, consumed: 1 };
+  }
+  const second = data[offset + 1];
+  if (second === undefined) {
+    throw new Error('Solana transaction: truncated compact-u16.');
+  }
+  if ((second & 0x80) === 0) {
+    return { value: ((first & 0x7f) << 7) | second, consumed: 2 };
+  }
+  const third = data[offset + 2];
+  if (third === undefined) {
+    throw new Error('Solana transaction: truncated compact-u16.');
+  }
+  return { value: ((first & 0x7f) << 14) | ((second & 0x7f) << 7) | third, consumed: 3 };
+}
+
+/**
+ * Parses a base58-encoded serialized Solana transaction into its signatures and
+ * message, per the wire format:
+ *   [compact-u16 signature count] [64-byte signatures...] [message]
+ *
+ * The message's header tells us how many of the leading account keys are
+ * required signers; the wallet's signature slot is the position of its pubkey
+ * among those signers.
+ */
+export function parseSolanaTransaction(serialized: string): {
+  message: Uint8Array;
+  /** Base58-encoded account keys, in wire order. */
+  accountKeys: string[];
+  /** Number of required signatures (from the message header). */
+  numRequiredSignatures: number;
+  /** The account-key index the wallet must sign as (fee payer is index 0). */
+  feePayerIndex: number;
+} {
+  const bytes = base58.decode(serialized);
+
+  const sigCount = decodeCompactU16(bytes, 0);
+  const signaturesStart = sigCount.consumed;
+  const signaturesEnd = signaturesStart + sigCount.value * 64;
+  if (bytes.length < signaturesEnd + 3) {
+    throw new Error('Solana transaction: missing message after signatures.');
+  }
+  const message = bytes.subarray(signaturesEnd);
+
+  const numRequiredSignatures = message[0];
+  if (numRequiredSignatures === undefined || numRequiredSignatures < 1) {
+    throw new Error('Solana transaction: invalid required-signature header.');
+  }
+  // Message header is [numRequired][readonlySigned][readonlyUnsigned].
+  const keyCount = decodeCompactU16(message, 3);
+  const accountKeys: string[] = [];
+  let offset = 3 + keyCount.consumed;
+  for (let i = 0; i < keyCount.value; i += 1) {
+    const key = message.subarray(offset, offset + 32);
+    if (key.length !== 32) {
+      throw new Error('Solana transaction: truncated account key.');
+    }
+    accountKeys.push(base58.encode(key));
+    offset += 32;
+  }
+  // The fee payer is the first account key (Solana convention).
+  const feePayerIndex = 0;
+
+  return {
+    message,
+    accountKeys,
+    numRequiredSignatures,
+    feePayerIndex,
+  };
+}
+
+/**
+ * Signs a dapp-supplied serialized Solana transaction (base58) with the wallet
+ * key, inserting the signature into the fee payer's slot.
+ *
+ * Returns the signature (base58) and the fully re-serialized transaction
+ * (base58), ready to broadcast. Throws if the wallet key is not one of the
+ * required signers.
+ */
+export function signSolanaTransaction(
+  serialized: string,
+  privateKey: Uint8Array,
+  address: string,
+): { signature: string; signedTransaction: string } {
+  if (privateKey.length !== 32) {
+    throw new Error(`Solana private key must be 32 bytes, got ${privateKey.length}.`);
+  }
+
+  const parsed = parseSolanaTransaction(serialized);
+  const signerIndex = parsed.accountKeys.indexOf(address);
+  if (signerIndex === -1 || signerIndex >= parsed.numRequiredSignatures) {
+    throw new Error('Solana transaction: wallet is not a required signer.');
+  }
+
+  const messageHash = sha256(parsed.message);
+  const signature = ed25519.sign(messageHash, privateKey);
+
+  // Rebuild the wire format: [count prefix][signatures with ours inserted at
+  // `signerIndex`][message]. Existing signatures are preserved; only the slot
+  // for the wallet's account key is overwritten.
+  const bytes = base58.decode(serialized);
+  const sigCount = decodeCompactU16(bytes, 0);
+  const sigsStart = sigCount.consumed;
+  const existingSigs = bytes.subarray(sigsStart, sigsStart + sigCount.value * 64);
+
+  const out = new Uint8Array(sigCount.consumed + sigCount.value * 64 + parsed.message.length);
+  out.set(bytes.subarray(0, sigsStart), 0); // count prefix
+  out.set(existingSigs.subarray(0, signerIndex * 64), sigsStart);
+  out.set(signature, sigsStart + signerIndex * 64);
+  out.set(
+    existingSigs.subarray((signerIndex + 1) * 64),
+    sigsStart + (signerIndex + 1) * 64,
+  );
+  out.set(parsed.message, sigsStart + sigCount.value * 64);
+
+  return {
+    signature: base58.encode(signature),
+    signedTransaction: base58.encode(out),
+  };
+}
+
+/**
+ * Signs a raw message (already decoded from base58 by the caller) per Phantom's
+ * `signMessage` convention: a bare ed25519 signature over the message bytes
+ * (no domain separator). Returns the base58 signature.
+ */
+export function signSolanaMessage(
+  message: Uint8Array,
+  privateKey: Uint8Array,
+): { signature: string } {
+  if (privateKey.length !== 32) {
+    throw new Error(`Solana private key must be 32 bytes, got ${privateKey.length}.`);
+  }
+  const signature = ed25519.sign(message, privateKey);
+  return { signature: base58.encode(signature) };
+}
+
+function concat(arrays: Uint8Array[]): Uint8Array {
+  const total = arrays.reduce((n, a) => n + a.length, 0);
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const a of arrays) {
+    out.set(a, offset);
+    offset += a.length;
+  }
+  return out;
+}
+
+function bytesToHex(bytes: Uint8Array): string {
+  let out = '';
+  for (const b of bytes) {
+    out += b.toString(16).padStart(2, '0');
+  }
+  return out;
+}

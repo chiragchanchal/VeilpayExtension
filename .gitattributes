@@ -1,0 +1,22 @@
+# Normalise line endings in the repository regardless of contributor platform.
+#
+# Not cosmetic: the roadmap's 4.10 gate publishes a hash of the built bundle, and
+# a CRLF checkout would change source bytes and therefore that hash. Pinning eol
+# to LF keeps a build on Windows byte-identical to one on Linux.
+* text=auto eol=lf
+
+# Binary assets must never be touched by eol conversion.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.pem binary
+*.crx binary
+
+# Circuit artifacts, once vendored for the D3 spike.
+*.wasm binary
+*.zkey binary
+*.ptau binary

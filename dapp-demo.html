@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Veilpay dApp Demo</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0b0f1a;
+        --surface: #151b2c;
+        --surface-2: #1d2438;
+        --border: #2a3350;
+        --text: #e6e9f2;
+        --text-dim: #94a0b8;
+        --accent: #7c5cff;
+        --ok: #34d399;
+        --err: #f87171;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: system-ui, -apple-system, sans-serif;
+        line-height: 1.5;
+      }
+      .wrap { max-width: 720px; margin: 0 auto; padding: 24px; }
+      h1 { font-size: 20px; margin: 0 0 4px; }
+      .sub { color: var(--text-dim); font-size: 13px; margin-bottom: 20px; }
+      .card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 16px;
+        margin-bottom: 12px;
+      }
+      .card h2 { font-size: 14px; margin: 0 0 10px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.04em; }
+      .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
+      button {
+        background: var(--surface-2);
+        border: 1px solid var(--border);
+        color: var(--text);
+        border-radius: 8px;
+        padding: 8px 12px;
+        font-size: 13px;
+        cursor: pointer;
+      }
+      button:hover { border-color: var(--accent); }
+      button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+      input, textarea {
+        background: var(--surface-2);
+        border: 1px solid var(--border);
+        color: var(--text);
+        border-radius: 8px;
+        padding: 8px 10px;
+        font-size: 13px;
+        font-family: ui-monospace, monospace;
+        width: 100%;
+        margin-bottom: 8px;
+      }
+      textarea { min-height: 72px; resize: vertical; }
+      .out {
+        background: var(--surface-2);
+        border-radius: 8px;
+        padding: 8px 10px;
+        font-family: ui-monospace, monospace;
+        font-size: 12px;
+        white-space: pre-wrap;
+        word-break: break-all;
+        margin-top: 4px;
+        color: var(--text-dim);
+      }
+      .ok { color: var(--ok); }
+      .err { color: var(--err); }
+      .badge {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 999px;
+        font-size: 11px;
+        margin-left: 6px;
+      }
+      .badge.on { background: rgba(52, 211, 153, 0.15); color: var(--ok); }
+      .badge.off { background: rgba(248, 113, 113, 0.15); color: var(--err); }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>Veilpay dApp Demo</h1>
+      <p class="sub">
+        A test dApp for the extension provider. Open this page in a tab while the
+        extension is loaded — <code>window.veilpay</code> is injected by the content
+        script on <code>http://localhost</code>. Every call that needs it triggers
+        an approval overlay in the wallet popup or side panel.
+      </p>
+
+      <div class="card">
+        <h2>Provider status</h2>
+        <div class="row">
+          <button id="btn-ping">ping</button>
+          <button id="btn-status">status</button>
+          <span id="provider-badge" class="badge off">not detected</span>
+        </div>
+        <div id="out-status" class="out">—</div>
+      </div>
+
+      <div class="card">
+        <h2>EVM (EIP-1193) — window.veilpay.ethereum</h2>
+        <div class="row">
+          <button id="btn-chainid">eth_chainId</button>
+          <button id="btn-accounts">eth_accounts</button>
+          <button class="primary" id="btn-connect">eth_requestAccounts</button>
+        </div>
+        <div class="row">
+          <input id="switch-chain" value="0x1" aria-label="Chain ID (hex)" />
+          <button id="btn-switch">wallet_switchEthereumChain</button>
+        </div>
+        <div class="row">
+          <input id="tx-to" value="0x0000000000000000000000000000000000000001" aria-label="Recipient" />
+          <input id="tx-value" value="0xde0b6b3a7640000" aria-label="Value (hex wei)" />
+          <button id="btn-send">eth_sendTransaction</button>
+        </div>
+        <div class="row">
+          <input id="sign-msg" value="hello veilpay" aria-label="Message to sign" />
+          <button id="btn-sign">personal_sign</button>
+        </div>
+        <div id="out-evm" class="out">—</div>
+      </div>
+
+      <div class="card">
+        <h2>Solana — window.veilpay.solana</h2>
+        <div class="row">
+          <button class="primary" id="btn-sol-connect">connect</button>
+          <input id="sol-msg" value="veilpay demo message" aria-label="Solana message" />
+          <button id="btn-sol-signmsg">signMessage</button>
+        </div>
+        <div class="row">
+          <input id="sol-tx" aria-label="Serialized transaction (base58)" placeholder="Paste a base58-serialized Solana transaction, or use 'Build demo transfer'" />
+          <button id="btn-sol-mktx">Build demo transfer</button>
+          <button id="btn-sol-signtx">signTransaction</button>
+        </div>
+        <div id="out-sol" class="out">—</div>
+      </div>
+
+      <div class="card">
+        <h2>x402 — window.veilpay.agent</h2>
+        <div class="row">
+          <input id="x402-server" value="http://localhost:3402" aria-label="Reference 402 server" />
+          <button id="btn-x402-fetch">Fetch challenge</button>
+          <button class="primary" id="btn-x402-pay">Pay &amp; replay</button>
+          <button id="btn-grant-request">Request grant</button>
+        </div>
+        <p style="font-size: 12px; color: var(--text-dim); margin: 4px 0 0">
+          Run <code>npm run x402:server</code> first. "Fetch challenge" pulls an x402
+          challenge from the reference server; "Pay &amp; replay" asks the wallet to pay it
+          (approval overlay), then replays the protected request with the
+          <code>X-PAYMENT</code> header.
+        </p>
+        <div id="out-x402" class="out">—</div>
+      </div>
+
+      <div class="card">
+        <h2>Notes</h2>
+        <p style="font-size: 13px; color: var(--text-dim); margin: 0">
+          <code>eth_requestAccounts</code> / <code>solana.connect</code> return a pending
+          approval when the origin is not yet approved; approve it in the wallet.
+          <code>eth_sendTransaction</code>, <code>personal_sign</code>,
+          <code>solana.signTransaction</code>, and <code>solana.signMessage</code> each open
+          a transaction/signature approval. A demo transfer is built client-side in this page
+          (wire format, zero signature slot) so <code>signTransaction</code> can be exercised
+          without <code>@solana/web3.js</code>.
+        </p>
+      </div>
+    </div>
+    <script type="module" src="/src/dapp-demo/main.ts"></script>
+  </body>
+</html>

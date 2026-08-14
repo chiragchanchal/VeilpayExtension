@@ -1,0 +1,42 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html,
+  body {
+    margin: 0;
+    padding: 0;
+  }
+
+  body {
+    @apply bg-surface-900 font-body text-content-primary antialiased;
+  }
+
+  /* Visible focus for keyboard users, suppressed for mouse clicks.
+     Required by the WCAG 2.2 AA gate. */
+  :focus-visible {
+    @apply outline-none ring-2 ring-accent-500 ring-offset-2 ring-offset-surface-900;
+  }
+
+  [data-theme='light'] body {
+    @apply bg-light-900 text-content-inverse;
+  }
+}
+
+@layer utilities {
+  /* Respect the OS reduced-motion preference everywhere, once. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
