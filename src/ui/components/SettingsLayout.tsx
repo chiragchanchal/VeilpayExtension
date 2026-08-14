@@ -9,6 +9,7 @@ import { getCustomNetworks, addCustomNetwork, removeCustomNetwork, type CustomNe
 import { AddressBookView } from '@/ui/components/AddressBookView';
 import { TransactionHistoryView } from '@/ui/components/TransactionHistoryView';
 import { SessionManagementView } from '@/ui/components/SessionManagementView';
+import { AuditView } from '@/ui/components/AuditView';
 import {
   createGrant,
   listGrants,
@@ -18,7 +19,7 @@ import {
 } from '@/core/vap/grant';
 import { appendAudit } from '@/core/vap/audit';
 
-type SettingsTab = 'general' | 'security' | 'networks' | 'permissions' | 'vap' | 'addressbook' | 'transactions' | 'session' | 'about';
+type SettingsTab = 'general' | 'security' | 'networks' | 'permissions' | 'vap' | 'addressbook' | 'transactions' | 'session' | 'audit' | 'about';
 
 /**
  * Settings layout with sidebar navigation.
@@ -60,6 +61,7 @@ export function SettingsLayout({ onClose }: { onClose?: () => void }) {
     { key: 'addressbook', label: 'Address Book' },
     { key: 'transactions', label: 'Transactions' },
     { key: 'session', label: 'Session' },
+    { key: 'audit', label: 'Audit' },
     { key: 'about', label: 'About' },
   ];
 
@@ -110,6 +112,7 @@ export function SettingsLayout({ onClose }: { onClose?: () => void }) {
         {tab === 'addressbook' && <AddressBookView />}
         {tab === 'transactions' && <TransactionHistoryView />}
         {tab === 'session' && <SessionManagementView />}
+        {tab === 'audit' && <AuditView />}
         {tab === 'about' && <AboutSection />}
       </div>
     </div>
