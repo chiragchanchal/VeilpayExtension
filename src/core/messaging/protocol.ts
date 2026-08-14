@@ -451,6 +451,12 @@ export const VapGrantResolveRequest = baseEnvelope.extend({
   payload: z.object({
     id: z.string().min(1),
     action: z.enum(['approve', 'deny']),
+    /**
+     * PIN required when approving and a PIN is configured (VAP-01). Carried
+     * over the bus only from our own UI surface (the resolve kind is
+     * privileged), verified by the background before the grant is created.
+     */
+    pin: z.string().max(128).optional(),
   }),
 });
 

@@ -1,7 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { t } from '@/i18n';
 import { Button } from '@/ui/components/Button';
 import { Card } from '@/ui/components/Card';
+import { Input } from '@/ui/components/Input';
+import { useWallet } from '@/ui/store/useWallet';
 import type { PendingGrantRequest } from '@/ui/store/useWallet';
 
 /** Formats a wei decimal string as a short ETH figure for display. */
@@ -22,8 +24,10 @@ function formatEthAmount(wei: string): string {
  * `window.veilpay.agent.requestGrant(...)`.
  *
  * Displays the requested caps verbatim. Approving is gated by a 3s hold-to-
- * confirm countdown (anti-clickjack, spec §9): a hidden frame's programmatic
- * click cannot create a grant without the user visibly holding.
+ * confirm countdown (anti-clickjack, spec §9), and — when a PIN is configured —
+ * by the PIN itself (VAP-01: a grant cannot be created without PIN or WebAuthn
+ * confirmation). The PIN is verified in the background at resolve time, not in
+ * the UI.
  */
 export function GrantApproval({
   request,
@@ -31,14 +35,22 @@ export function GrantApproval({
   onReject,
 }: {
   request: PendingGrantRequest;
-  onApprove: () => void;
+  onApprove: (pin?: string) => void;
   onReject: () => void;
 }) {
+  const { securityStatus, loadSecurityStatus } = useWallet();
   const [isLoading, setIsLoading] = useState(false);
   const [confirmState, setConfirmState] = useState<'idle' | 'counting' | 'ready'>('idle');
   const [confirmCount, setConfirmCount] = useState(3);
+  const [pin, setPin] = useState('');
   const caps = request.requestedCaps;
   const expiresAt = new Date(Date.now() + request.expiresInSeconds * 1000);
+
+  const pinRequired = securityStatus?.pinEnabled === true;
+
+  useEffect(() => {
+    void loadSecurityStatus();
+  }, [loadSecurityStatus]);
 
   const handleApprove = async () => {
     if (confirmState === 'idle') {
@@ -56,14 +68,22 @@ export function GrantApproval({
       return;
     }
     if (confirmState !== 'ready') return;
+    if (pinRequired && pin.length === 0) return;
     setIsLoading(true);
-    await onApprove();
+    await onApprove(pinRequired ? pin : undefined);
   };
 
   const handleReject = async () => {
     setIsLoading(true);
     await onReject();
   };
+
+  // The button must stay enabled in the idle state so the first click can start
+  // the countdown; the PIN requirement gates only the ready (post-hold) state.
+  const approveDisabled =
+    isLoading ||
+    confirmState === 'counting' ||
+    (confirmState === 'ready' && pinRequired && pin.length === 0);
 
   return (
     <main className="flex min-h-[600px] w-[400px] flex-col gap-4 p-4">
@@ -96,6 +116,18 @@ export function GrantApproval({
           </div>
         </Card>
 
+        {pinRequired && confirmState === 'ready' && (
+          <Input
+            type="password"
+            label="PIN"
+            placeholder="Enter your PIN to create the grant"
+            value={pin}
+            onChange={(e) => setPin(e.target.value)}
+            autoFocus
+            disabled={isLoading}
+          />
+        )}
+
         <div className="mt-auto flex gap-3">
           <Button variant="secondary" fullWidth onClick={handleReject} disabled={isLoading}>
             {t('common.reject')}
@@ -104,7 +136,7 @@ export function GrantApproval({
             variant="primary"
             fullWidth
             onClick={handleApprove}
-            disabled={isLoading || confirmState === 'counting'}
+            disabled={approveDisabled}
           >
             {isLoading
               ? 'Creating…'

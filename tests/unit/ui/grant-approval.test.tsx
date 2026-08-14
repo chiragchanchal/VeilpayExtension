@@ -1,9 +1,9 @@
 import '@testing-library/jest-dom/vitest';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { GrantApproval } from '@/ui/components/GrantApproval';
-import type { PendingGrantRequest } from '@/ui/store/useWallet';
+import { useWallet, type PendingGrantRequest } from '@/ui/store/useWallet';
 
 const REQUEST: PendingGrantRequest = {
   id: 'g-1',
@@ -20,6 +20,10 @@ const REQUEST: PendingGrantRequest = {
   expiresInSeconds: 604_800,
   createdAt: 1_000,
 };
+
+beforeEach(() => {
+  useWallet.setState({ securityStatus: null });
+});
 
 describe('GrantApproval', () => {
   it('shows the requested caps and origin', () => {
@@ -60,6 +64,28 @@ describe('GrantApproval', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: 'Create grant' }));
     expect(onApprove).toHaveBeenCalledTimes(1);
+
+    vi.useRealTimers();
+  });
+
+  it('requires the PIN before approving when one is configured (VAP-01)', async () => {
+    useWallet.setState({ securityStatus: { pinEnabled: true, webauthnEnabled: false } });
+    vi.useFakeTimers();
+    const onApprove = vi.fn(async () => undefined);
+    render(<GrantApproval request={REQUEST} onApprove={onApprove} onReject={() => {}} />);
+
+    // Complete the hold, then the PIN field appears and approve stays disabled.
+    fireEvent.click(screen.getByRole('button', { name: 'Create grant' }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_000);
+    });
+    expect(screen.getByLabelText('PIN')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Create grant' })).toBeDisabled();
+
+    // Entering a PIN enables approval; the PIN is passed to onApprove.
+    fireEvent.change(screen.getByLabelText('PIN'), { target: { value: '1234' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create grant' }));
+    expect(onApprove).toHaveBeenCalledWith('1234');
 
     vi.useRealTimers();
   });

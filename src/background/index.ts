@@ -912,6 +912,22 @@ const handlers: HandlerMap = {
       throw new ProtocolError('BAD_REQUEST', 'No pending grant request with that id.');
     }
 
+    // VAP-01: a grant cannot be created without PIN confirmation when a PIN is
+    // configured. The PIN is verified here, at the authorization boundary,
+    // before the waiter settles — a failed check leaves the grant uncreated.
+    if (payload.action === 'approve') {
+      const status = await getSecurityStatus();
+      if (status.pinEnabled) {
+        if (payload.pin === undefined) {
+          throw new ProtocolError('BAD_REQUEST', 'A PIN is required to create a grant.');
+        }
+        const { ok } = await verifyUserPin(payload.pin);
+        if (!ok) {
+          throw new ProtocolError('BAD_REQUEST', 'Incorrect PIN. The grant was not created.');
+        }
+      }
+    }
+
     const settled = resolveGrantApproval(payload.id, payload.action);
     await clearPendingGrantRequest();
     if (!settled) {

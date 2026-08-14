@@ -159,8 +159,15 @@ interface WalletActions {
   resolvePendingX402(id: string, action: 'approve' | 'deny'): Promise<boolean>;
   /** Reads the current pending VAP grant request, if any. */
   loadPendingGrantRequest(): Promise<void>;
-  /** Approves or denies the pending VAP grant request. */
-  resolvePendingGrantRequest(id: string, action: 'approve' | 'deny'): Promise<boolean>;
+  /**
+   * Approves or denies the pending VAP grant request.
+   * `pin` is required on approve when the wallet has a PIN configured (VAP-01).
+   */
+  resolvePendingGrantRequest(
+    id: string,
+    action: 'approve' | 'deny',
+    pin?: string,
+  ): Promise<boolean>;
 }
 
 const send = createClient('popup' as MessageSource);
@@ -516,10 +523,10 @@ export const useWallet = create<WalletState & WalletActions>((set, get) => ({
     }
   },
 
-  resolvePendingGrantRequest: async (id, action) => {
+  resolvePendingGrantRequest: async (id, action, pin) => {
     set({ isLoading: true, error: null });
     try {
-      const { ok } = await send('vap.grant.resolve', { id, action });
+      const { ok } = await send('vap.grant.resolve', { id, action, pin });
       if (ok) set({ pendingGrantRequest: null });
       return ok;
     } catch (cause) {

@@ -500,6 +500,27 @@ describe('privileged kind enforcement', () => {
     if (!response.ok) expect(response.error.code).toBe('ORIGIN_DENIED');
     expect(list).not.toHaveBeenCalled();
   });
+
+  it('denies vap.grant.resolve from a compromised content script', async () => {
+    // Resolving a pending grant request persists a standing grant, so a page
+    // must not be able to drive it (VAP-01 boundary).
+    const resolve = vi.fn();
+    const response = await dispatch(
+      {
+        id: newId(),
+        v: 1,
+        source: 'content',
+        kind: 'vap.grant.resolve',
+        payload: { id: 'g-1', action: 'approve' },
+      },
+      pageSender,
+      handlers({ 'vap.grant.resolve': resolve as unknown as HandlerMap['vap.grant.resolve'] }),
+    );
+
+    expect(response.ok).toBe(false);
+    if (!response.ok) expect(response.error.code).toBe('ORIGIN_DENIED');
+    expect(resolve).not.toHaveBeenCalled();
+  });
 });
 
 /**
