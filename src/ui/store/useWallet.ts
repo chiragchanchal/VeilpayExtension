@@ -161,13 +161,17 @@ interface WalletActions {
   loadPendingGrantRequest(): Promise<void>;
   /**
    * Approves or denies the pending VAP grant request.
-   * `pin` is required on approve when the wallet has a PIN configured (VAP-01).
+   * `pin` is required on approve when the wallet has a PIN configured; `webauthn`
+   * must be true when WebAuthn is the configured confirmation method (VAP-01).
    */
   resolvePendingGrantRequest(
     id: string,
     action: 'approve' | 'deny',
     pin?: string,
+    webauthn?: boolean,
   ): Promise<boolean>;
+  /** Starts a WebAuthn ceremony; returns the credential id and hex challenge. */
+  requestWebAuthnChallenge(): Promise<{ credentialId: string; challenge: string } | null>;
 }
 
 const send = createClient('popup' as MessageSource);
@@ -523,10 +527,10 @@ export const useWallet = create<WalletState & WalletActions>((set, get) => ({
     }
   },
 
-  resolvePendingGrantRequest: async (id, action, pin) => {
+  resolvePendingGrantRequest: async (id, action, pin, webauthn) => {
     set({ isLoading: true, error: null });
     try {
-      const { ok } = await send('vap.grant.resolve', { id, action, pin });
+      const { ok } = await send('vap.grant.resolve', { id, action, pin, webauthn });
       if (ok) set({ pendingGrantRequest: null });
       return ok;
     } catch (cause) {
@@ -534,6 +538,16 @@ export const useWallet = create<WalletState & WalletActions>((set, get) => ({
       return false;
     } finally {
       set({ isLoading: false });
+    }
+  },
+
+  requestWebAuthnChallenge: async () => {
+    set({ error: null });
+    try {
+      return await send('security.webauthn.challenge', {});
+    } catch (cause) {
+      set({ error: messageFor(cause, 'Could not start passkey confirmation.') });
+      return null;
     }
   },
 

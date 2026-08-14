@@ -79,8 +79,8 @@ export default function SidePanelApp() {
     if (pendingX402Payment !== null) await resolvePendingX402(pendingX402Payment.id, 'deny');
   };
 
-  const handleApproveGrant = async (pin?: string) => {
-    if (pendingGrantRequest !== null) await resolvePendingGrantRequest(pendingGrantRequest.id, 'approve', pin);
+  const handleApproveGrant = async (pin?: string, webauthn?: boolean) => {
+    if (pendingGrantRequest !== null) await resolvePendingGrantRequest(pendingGrantRequest.id, 'approve', pin, webauthn);
   };
 
   const handleDenyGrant = async () => {

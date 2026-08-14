@@ -41,6 +41,7 @@ export const RequestKind = z.enum([
   'security.pin.setup',
   'security.pin.verify',
   'security.webauthn.setup',
+  'security.webauthn.challenge',
   'eth.chainId',
   'eth.requestAccounts',
   'eth.accounts',
@@ -264,6 +265,15 @@ export const SecurityWebauthnSetupRequest = baseEnvelope.extend({
   payload: z.object({}),
 });
 
+/**
+ * Starts a WebAuthn authentication ceremony: the UI presents the returned
+ * challenge to the authenticator and reports success via the resolve path.
+ */
+export const SecurityWebauthnChallengeRequest = baseEnvelope.extend({
+  kind: z.literal('security.webauthn.challenge'),
+  payload: z.object({}),
+});
+
 // ── EIP-1193 dapp provider ────────────────────────────────────────────────
 
 export const EthChainIdRequest = baseEnvelope.extend({
@@ -457,6 +467,14 @@ export const VapGrantResolveRequest = baseEnvelope.extend({
      * privileged), verified by the background before the grant is created.
      */
     pin: z.string().max(128).optional(),
+    /**
+     * True when the UI completed a WebAuthn passkey ceremony for this approval.
+     * Required when WebAuthn is enabled and no PIN is configured (VAP-01).
+     * The ceremony runs in the UI context (`navigator.credentials` is not
+     * available in the service worker); this flag travels the privileged
+     * resolve kind, so a page cannot forge it.
+     */
+    webauthn: z.boolean().optional(),
   }),
 });
 
@@ -517,6 +535,7 @@ export const Request = z.discriminatedUnion('kind', [
   SecurityPinSetupRequest,
   SecurityPinVerifyRequest,
   SecurityWebauthnSetupRequest,
+  SecurityWebauthnChallengeRequest,
   EthChainIdRequest,
   EthRequestAccountsRequest,
   EthAccountsRequest,
@@ -673,6 +692,8 @@ export interface ResponseData {
   'security.pin.setup': { ok: boolean };
   'security.pin.verify': { ok: boolean };
   'security.webauthn.setup': { ok: boolean };
+  /** Challenge hex for a WebAuthn ceremony, with the registered credential id. */
+  'security.webauthn.challenge': { credentialId: string; challenge: string };
   /** Hex-encoded chain ID, e.g. "0xaa36a7" (Sepolia). */
   'eth.chainId': { chainId: string };
   /** Array of hex addresses the origin has permission to use. */

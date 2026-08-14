@@ -6,3 +6,4 @@
  */
 export * from './grant';
 export * from './decision';
+export * from './confirmation';

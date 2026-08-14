@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
+import { hexToBytes } from '@noble/hashes/utils';
 import { t } from '@/i18n';
 import { Button } from '@/ui/components/Button';
 import { Card } from '@/ui/components/Card';
 import { Input } from '@/ui/components/Input';
 import { useWallet } from '@/ui/store/useWallet';
 import type { PendingGrantRequest } from '@/ui/store/useWallet';
+import { authenticateWebAuthn } from '@/core/security';
 
 /** Formats a wei decimal string as a short ETH figure for display. */
 function formatEthAmount(wei: string): string {
@@ -24,10 +26,10 @@ function formatEthAmount(wei: string): string {
  * `window.veilpay.agent.requestGrant(...)`.
  *
  * Displays the requested caps verbatim. Approving is gated by a 3s hold-to-
- * confirm countdown (anti-clickjack, spec §9), and — when a PIN is configured —
- * by the PIN itself (VAP-01: a grant cannot be created without PIN or WebAuthn
- * confirmation). The PIN is verified in the background at resolve time, not in
- * the UI.
+ * confirm countdown (anti-clickjack, spec §9) and by VAP-01 confirmation:
+ * a PIN when configured (verified in the background), or a WebAuthn passkey
+ * ceremony when no PIN is configured (run here — `navigator.credentials` is a
+ * page-context API — with the result reported over the privileged resolve kind).
  */
 export function GrantApproval({
   request,
@@ -35,22 +37,40 @@ export function GrantApproval({
   onReject,
 }: {
   request: PendingGrantRequest;
-  onApprove: (pin?: string) => void;
+  onApprove: (pin?: string, webauthn?: boolean) => void;
   onReject: () => void;
 }) {
-  const { securityStatus, loadSecurityStatus } = useWallet();
+  const { securityStatus, loadSecurityStatus, requestWebAuthnChallenge } = useWallet();
   const [isLoading, setIsLoading] = useState(false);
   const [confirmState, setConfirmState] = useState<'idle' | 'counting' | 'ready'>('idle');
   const [confirmCount, setConfirmCount] = useState(3);
   const [pin, setPin] = useState('');
+  const [webauthnConfirmed, setWebauthnConfirmed] = useState(false);
+  const [passkeyError, setPasskeyError] = useState<string | null>(null);
   const caps = request.requestedCaps;
   const expiresAt = new Date(Date.now() + request.expiresInSeconds * 1000);
 
   const pinRequired = securityStatus?.pinEnabled === true;
+  const webauthnRequired = securityStatus?.webauthnEnabled === true && !pinRequired;
 
   useEffect(() => {
     void loadSecurityStatus();
   }, [loadSecurityStatus]);
+
+  const handlePasskey = async () => {
+    setPasskeyError(null);
+    const result = await requestWebAuthnChallenge();
+    if (result === null) {
+      setPasskeyError('Could not start passkey confirmation.');
+      return;
+    }
+    const ok = await authenticateWebAuthn(result.credentialId, hexToBytes(result.challenge));
+    if (ok) {
+      setWebauthnConfirmed(true);
+    } else {
+      setPasskeyError('Passkey confirmation failed. Try again.');
+    }
+  };
 
   const handleApprove = async () => {
     if (confirmState === 'idle') {
@@ -69,8 +89,9 @@ export function GrantApproval({
     }
     if (confirmState !== 'ready') return;
     if (pinRequired && pin.length === 0) return;
+    if (webauthnRequired && !webauthnConfirmed) return;
     setIsLoading(true);
-    await onApprove(pinRequired ? pin : undefined);
+    await onApprove(pinRequired ? pin : undefined, webauthnRequired);
   };
 
   const handleReject = async () => {
@@ -79,11 +100,10 @@ export function GrantApproval({
   };
 
   // The button must stay enabled in the idle state so the first click can start
-  // the countdown; the PIN requirement gates only the ready (post-hold) state.
-  const approveDisabled =
-    isLoading ||
-    confirmState === 'counting' ||
-    (confirmState === 'ready' && pinRequired && pin.length === 0);
+  // the countdown; the confirmation requirement gates only the ready state.
+  const confirmationMissing =
+    (pinRequired && pin.length === 0) || (webauthnRequired && !webauthnConfirmed);
+  const approveDisabled = isLoading || confirmState === 'counting' || (confirmState === 'ready' && confirmationMissing);
 
   return (
     <main className="flex min-h-[600px] w-[400px] flex-col gap-4 p-4">
@@ -126,6 +146,17 @@ export function GrantApproval({
             autoFocus
             disabled={isLoading}
           />
+        )}
+
+        {webauthnRequired && confirmState === 'ready' && !webauthnConfirmed && (
+          <div className="flex flex-col gap-1">
+            <Button variant="secondary" fullWidth onClick={handlePasskey} disabled={isLoading}>
+              {isLoading ? 'Confirming…' : 'Confirm with passkey'}
+            </Button>
+            {passkeyError !== null && (
+              <p className="font-body text-xs text-danger">{passkeyError}</p>
+            )}
+          </div>
         )}
 
         <div className="mt-auto flex gap-3">

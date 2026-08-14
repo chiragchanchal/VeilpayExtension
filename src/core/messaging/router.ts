@@ -248,6 +248,12 @@ export async function dispatch(
           ok: true,
           data: await handlers['security.webauthn.setup'](request.payload, ctx),
         };
+      case 'security.webauthn.challenge':
+        return {
+          id: request.id,
+          ok: true,
+          data: await handlers['security.webauthn.challenge'](request.payload, ctx),
+        };
       case 'eth.chainId':
         return {
           id: request.id,

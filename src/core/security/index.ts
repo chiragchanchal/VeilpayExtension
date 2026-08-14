@@ -205,6 +205,26 @@ export async function getSecurityStatus(): Promise<SecurityStatus> {
 }
 
 /**
+ * Starts a WebAuthn authentication ceremony: returns the registered credential
+ * id and a fresh random challenge for the UI to present to the authenticator.
+ * Returns null when no passkey is registered. The credential id is a public
+ * handle (not secret); the challenge is single-use by convention.
+ */
+export async function getWebAuthnChallenge(): Promise<{
+  credentialId: string;
+  challenge: Uint8Array;
+} | null> {
+  const settings = await readSettings();
+  if (!settings.webauthnEnabled || settings.webauthnCredentialId === null) {
+    return null;
+  }
+  return {
+    credentialId: settings.webauthnCredentialId,
+    challenge: crypto.getRandomValues(new Uint8Array(32)),
+  };
+}
+
+/**
  * Sets up a PIN. If the PIN was already set, this updates it.
  */
 export async function setupPin(pin: string): Promise<{ ok: boolean }> {

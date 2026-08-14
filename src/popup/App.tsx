@@ -138,9 +138,9 @@ export default function App() {
     await resolvePendingX402(pendingX402Payment.id, 'deny');
   };
 
-  const handleApproveGrant = async (pin?: string) => {
+  const handleApproveGrant = async (pin?: string, webauthn?: boolean) => {
     if (pendingGrantRequest === null) return;
-    await resolvePendingGrantRequest(pendingGrantRequest.id, 'approve', pin);
+    await resolvePendingGrantRequest(pendingGrantRequest.id, 'approve', pin, webauthn);
   };
 
   const handleDenyGrant = async () => {

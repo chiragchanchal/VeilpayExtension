@@ -50,6 +50,7 @@ function handlers(overrides: Partial<HandlerMap> = {}): HandlerMap {
     'security.pin.setup': async () => ({ ok: true }),
     'security.pin.verify': async () => ({ ok: true }),
     'security.webauthn.setup': async () => ({ ok: true }),
+    'security.webauthn.challenge': async () => ({ credentialId: 'cred-1', challenge: '0a' }),
     'eth.chainId': async () => ({ chainId: '0xaa36a7' }),
     'eth.requestAccounts': async () => ({ accounts: [] }),
     'eth.accounts': async () => ({ accounts: [] }),

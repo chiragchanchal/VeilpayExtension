@@ -14,10 +14,17 @@ spike, @scure/@noble crypto, zod message protocol).
 **Phase 3 S4 (x402 consumer, always-prompt) — DONE (this session).**
 **Phase 3 S5a (VAP grants core) — DONE (this session).**
 **Phase 3 S5b (grant negotiation + audit + rate limit) — DONE (this session).**
+**Phase 3 S5c (PIN-gated grant creation, VAP-01) — DONE (this session).**
+
+## Version control (FIXED this session)
+
+Repo now has git history on `main`: `2ea7e3e` (initial commit, 189 files) +
+`6c8069f` (S5c). Working on main directly (solo local repo, no remote); the
+"no git history" risk-register item is resolved.
 
 ## Verified green (complete `npm run gate:all`, Aug 15)
 
-- typecheck, lint (`--max-warnings 0`), vitest **299 pass / 37 files**, vite build,
+- typecheck, lint (`--max-warnings 0`), vitest **301 pass / 37 files**, vite build,
   bundle-size gate (5.3% of 5 MB), secret-leak gate.
 
 ## S4 — x402 consumer (always-prompt)
@@ -61,9 +68,23 @@ spike, @scure/@noble crypto, zod message protocol).
 - `import.meta.env.VITE_INDEXER_URL` must be set at build time for indexer/tx-history.
 - The `remember` plugin's autonomous saves have been flaky; this file is the manual checkpoint.
 
+## S5c — PIN-gated grant creation
+
+- `vap.grant.resolve` payload gains optional `pin`; background verifies via
+  `verifyUserPin` when `security.status.pinEnabled` before settling the waiter
+  (VAP-01). Wrong/missing PIN → BAD_REQUEST, grant uncreated.
+- `GrantApproval.tsx` shows a PIN field after the 3s hold when a PIN is
+  configured; the approve button gates only the ready state (first click must
+  start the countdown). Store `resolvePendingGrantRequest(id, action, pin?)`.
+- Settings-path grant creation is NOT PIN-gated (user is in their own trusted
+  settings surface). WebAuthn-auth ceremony is a follow-up (needs real browser
+  gestures; can't be unit-tested).
+- Gotcha: `approveDisabled` must not disable the idle-state button when PIN is
+  required, or the countdown can never start.
+
 ## Next steps (Phase 3)
 
-- **S5c**: PIN/WebAuthn gating on grant creation (spec requires it; currently 3s-hold only); OperationService state machine + durable queue (3.2).
+- **S5d**: WebAuthn confirmation for grant creation (VAP-01 full); OperationService state machine + durable queue (3.2).
 - **S6**: privacy wiring — stealth addresses, encrypted notes, ZK shielded (testnet-gated).
 - **Phase 2 leftovers**: WalletConnect v2 (2.12); a few store-slice wirings (2.14); ErrorState/EmptyState everywhere (2.19).
-- **High risk**: repo has no git history — commit the work (risk register item).
+- **High risk**: repo now has git history on main (2 commits). Consider a remote/backup.

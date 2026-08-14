@@ -4,6 +4,11 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { GrantApproval } from '@/ui/components/GrantApproval';
 import { useWallet, type PendingGrantRequest } from '@/ui/store/useWallet';
+import { authenticateWebAuthn } from '@/core/security';
+
+vi.mock('@/core/security', () => ({
+  authenticateWebAuthn: vi.fn(async () => true),
+}));
 
 const REQUEST: PendingGrantRequest = {
   id: 'g-1',
@@ -85,7 +90,34 @@ describe('GrantApproval', () => {
     // Entering a PIN enables approval; the PIN is passed to onApprove.
     fireEvent.change(screen.getByLabelText('PIN'), { target: { value: '1234' } });
     fireEvent.click(screen.getByRole('button', { name: 'Create grant' }));
-    expect(onApprove).toHaveBeenCalledWith('1234');
+    expect(onApprove).toHaveBeenCalledWith('1234', false);
+
+    vi.useRealTimers();
+  });
+
+  it('requires a passkey ceremony before approving when only WebAuthn is configured', async () => {
+    useWallet.setState({
+      securityStatus: { pinEnabled: false, webauthnEnabled: true },
+      requestWebAuthnChallenge: async () => ({ credentialId: 'cred-1', challenge: '0a' }),
+    });
+    vi.useFakeTimers();
+    const onApprove = vi.fn(async () => undefined);
+    render(<GrantApproval request={REQUEST} onApprove={onApprove} onReject={() => {}} />);
+
+    // Complete the hold; approve stays disabled until the passkey ceremony runs.
+    fireEvent.click(screen.getByRole('button', { name: 'Create grant' }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_000);
+    });
+    expect(screen.getByRole('button', { name: 'Confirm with passkey' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Create grant' })).toBeDisabled();
+
+    // Run the ceremony (mocked success), then approve passes webauthn: true.
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm with passkey' }));
+    await act(async () => {});
+    expect(authenticateWebAuthn).toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Create grant' }));
+    expect(onApprove).toHaveBeenCalledWith(undefined, true);
 
     vi.useRealTimers();
   });

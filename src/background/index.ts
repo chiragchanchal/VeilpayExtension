@@ -19,8 +19,10 @@ import {
 } from '@/core/chains/solana/transaction';
 import { signStellarPayment, type UnsignedStellarPayment } from '@/core/chains/stellar/transaction';
 import { base58 } from '@scure/base';
+import { bytesToHex } from '@noble/hashes/utils';
 import {
   getSecurityStatus,
+  getWebAuthnChallenge,
   setupPin,
   verifyUserPin,
   setupWebAuthn,
@@ -66,6 +68,7 @@ import {
   recordSpend,
   requiresApproval,
 } from '@/core/vap/decision';
+import { requireGrantConfirmation } from '@/core/vap/confirmation';
 import { appendAudit } from '@/core/vap/audit';
 import {
   setPendingGrantRequest,
@@ -305,6 +308,25 @@ const handlers: HandlerMap = {
   'security.pin.verify': async (payload) => verifyUserPin(payload.pin),
 
   'security.webauthn.setup': async () => setupWebAuthn(),
+
+  /**
+   * Starts a WebAuthn ceremony for grant confirmation (VAP-01).
+   *
+   * The UI presents the returned challenge to the platform authenticator and
+   * reports success via `vap.grant.resolve`'s `webauthn` flag. `navigator.credentials`
+   * is not available in the service worker, so the ceremony runs in the UI; the
+   * flag travels the privileged resolve kind.
+   */
+  'security.webauthn.challenge': async () => {
+    const challenge = await getWebAuthnChallenge();
+    if (challenge === null) {
+      throw new ProtocolError('BAD_REQUEST', 'No passkey is registered on this device.');
+    }
+    return {
+      credentialId: challenge.credentialId,
+      challenge: bytesToHex(challenge.challenge),
+    };
+  },
 
   /**
    * EIP-1193 provider handlers.
@@ -912,16 +934,24 @@ const handlers: HandlerMap = {
       throw new ProtocolError('BAD_REQUEST', 'No pending grant request with that id.');
     }
 
-    // VAP-01: a grant cannot be created without PIN confirmation when a PIN is
-    // configured. The PIN is verified here, at the authorization boundary,
-    // before the waiter settles — a failed check leaves the grant uncreated.
+    // VAP-01: a grant cannot be created without PIN or WebAuthn confirmation.
+    // The gate decides which method applies; the PIN value is verified here, at
+    // the authorization boundary, before the waiter settles — a failed check
+    // leaves the grant uncreated.
     if (payload.action === 'approve') {
       const status = await getSecurityStatus();
+      // Build the attempt without a `pin` key when absent (exactOptionalPropertyTypes
+      // forbids passing `undefined` to an optional property).
+      const attempt: { pin?: string; webauthn: boolean } = {
+        webauthn: payload.webauthn === true,
+      };
+      if (payload.pin !== undefined) attempt.pin = payload.pin;
+      const confirmation = requireGrantConfirmation(status, attempt);
+      if (!confirmation.ok) {
+        throw new ProtocolError('BAD_REQUEST', confirmation.reason);
+      }
       if (status.pinEnabled) {
-        if (payload.pin === undefined) {
-          throw new ProtocolError('BAD_REQUEST', 'A PIN is required to create a grant.');
-        }
-        const { ok } = await verifyUserPin(payload.pin);
+        const { ok } = await verifyUserPin(payload.pin as string);
         if (!ok) {
           throw new ProtocolError('BAD_REQUEST', 'Incorrect PIN. The grant was not created.');
         }
