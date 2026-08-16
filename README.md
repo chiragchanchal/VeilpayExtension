@@ -242,3 +242,4 @@ MIT
 
 **Phase 1 Status**: Foundation scaffolding complete. Next: Integrate wallet + prove CSP/ZK spike.
 # VeilpayExtension
+# VeilpayExtension
