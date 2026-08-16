@@ -7,7 +7,11 @@ import {
   type ResponseData,
 } from './protocol';
 
-export const MESSAGE_TIMEOUT_MS = 15_000;
+// Must be LONGER than the storage open timeout (src/core/vault/storage.ts
+// DB_OPEN_TIMEOUT_MS) so a slow-but-recoverable IndexedDB open surfaces as an
+// accurate storage error, not as a misleading "background not responding".
+// (8s < 10s previously let the popup give up before the SW answered.)
+export const MESSAGE_TIMEOUT_MS = 12_000;
 
 /**
  * Typed caller for UI surfaces (popup / options / side panel).
@@ -34,7 +38,12 @@ async function sendWithTimeout(message: unknown): Promise<unknown> {
       chrome.runtime.sendMessage(message),
       new Promise<never>((_, reject) => {
         timer = setTimeout(() => {
-          reject(new RequestFailed('INTERNAL', 'The wallet did not respond in time.'));
+          reject(
+            new RequestFailed(
+              'BACKGROUND_UNREACHABLE',
+              'The Veilpay background service is not responding. Click Retry, or Reload to restart it.',
+            ),
+          );
         }, MESSAGE_TIMEOUT_MS);
       }),
     ]);

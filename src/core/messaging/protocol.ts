@@ -1,6 +1,10 @@
 import { z } from 'zod';
 import { X402Challenge } from '@/core/x402/types';
-import { GrantCaps, type Grant } from '@/core/vap/grant';
+// Type-only on purpose: `grant.ts` imports `GrantCaps` (a value) from this
+// module, so making this a value import would re-introduce a circular module
+// graph that fails at evaluation time with a TDZ ReferenceError (the previous
+// black-screen regression). Keep it type-only.
+import type { Grant } from '@/core/vap/grant';
 
 /**
  * The single message contract between every extension context.
@@ -221,6 +225,29 @@ export const MnemonicGenerateRequest = baseEnvelope.extend({
   kind: z.literal('mnemonic.generate'),
   payload: z.object({ strength: z.union([z.literal(128), z.literal(256)]) }),
 });
+
+/**
+ * VAP grant caps. Declared here so the wire contract stays self-contained and
+ * independently validatable (same reasoning as `ChainId`); `grant.ts` imports
+ * and re-exports it, so domain code keeps one source of truth.
+ */
+export const GrantCaps = z.object({
+  /** Hard ceiling per single operation, in base units (wei). */
+  maxPerOperation: Decimal,
+  /** Rolling-window ceiling, in base units (wei). */
+  maxPerWindow: Decimal,
+  /** Window length in seconds (1 min – 1 year). */
+  windowSeconds: z.number().int().min(60).max(31_536_000),
+  /** Above this amount, force user approval even in autonomous mode. */
+  approvalThreshold: Decimal,
+  /** Operation types this grant permits. x402.pay is the only op today. */
+  allowedOps: z.array(z.literal('x402.pay')).min(1),
+  /** Chains payments may settle on. EVM (Sepolia) only today. */
+  allowedChains: z.array(ChainId).min(1),
+  /** Allowed recipients; empty = any (discouraged but simple). */
+  allowlist: z.array(z.string()),
+});
+export type GrantCaps = z.infer<typeof GrantCaps>;
 
 /** Shared body for the two transfer kinds. `amountNative` is in base units. */
 const TransferPayload = {

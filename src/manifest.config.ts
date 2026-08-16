@@ -59,6 +59,10 @@ export default defineManifest({
     'alarms', // session idle timeout ticks while the SW is asleep
     'sidePanel', // full-height wallet surface
     'offscreen', // snarkjs / WASM host document (D3 spike)
+    'contextMenus', // right-click send/copy/lock menu. REQUIRED: without it
+    // chrome.contextMenus is undefined in the service worker and the module
+    // crashes at evaluation, which hangs every popup request (the SW registers
+    // onMessage then dies). This permission is what makes the SW boot at all.
   ],
 
   host_permissions: [

@@ -27,7 +27,7 @@ type SettingsTab = 'general' | 'security' | 'networks' | 'permissions' | 'vap' |
  */
 export function SettingsLayout({ onClose }: { onClose?: () => void }) {
   const [tab, setTab] = useState<SettingsTab>('general');
-  const { securityStatus, loadSecurityStatus } = useWallet();
+  const { securityStatus, loadSecurityStatus, refresh } = useWallet();
 
   const [permissions, setPermissions] = useState<OriginPermission[]>([]);
   const [isLoadingPerms, setIsLoadingPerms] = useState(false);
@@ -43,9 +43,10 @@ export function SettingsLayout({ onClose }: { onClose?: () => void }) {
   }, []);
 
   useEffect(() => {
+    void refresh();
     void loadSecurityStatus();
     void loadPermissions();
-  }, [loadSecurityStatus, loadPermissions]);
+  }, [refresh, loadSecurityStatus, loadPermissions]);
 
   const handleRevoke = async (origin: string) => {
     await revokeOrigin(origin);

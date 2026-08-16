@@ -91,7 +91,10 @@ export default function SidePanelApp() {
     void chrome.action.openPopup().catch(() => undefined);
   };
 
-  if (pendingConnection !== null) {
+  // All approval overlays are gated on the vault being unlocked: a dapp request
+  // that lands while the wallet is locked must surface the unlock screen, not
+  // the approval (matching the popup's gating).
+  if (vaultState === 'unlocked' && pendingConnection !== null) {
     return (
       <div className="bg-surface-base">
         <ConnectionApproval
@@ -104,7 +107,7 @@ export default function SidePanelApp() {
     );
   }
 
-  if (pendingApproval !== null) {
+  if (vaultState === 'unlocked' && pendingApproval !== null) {
     return (
       <div className="bg-surface-base">
         <TransactionApproval
@@ -116,7 +119,7 @@ export default function SidePanelApp() {
     );
   }
 
-  if (pendingX402Payment !== null) {
+  if (vaultState === 'unlocked' && pendingX402Payment !== null) {
     return (
       <div className="bg-surface-base">
         <X402Approval
@@ -128,7 +131,7 @@ export default function SidePanelApp() {
     );
   }
 
-  if (pendingGrantRequest !== null) {
+  if (vaultState === 'unlocked' && pendingGrantRequest !== null) {
     return (
       <div className="bg-surface-base">
         <GrantApproval

@@ -15,12 +15,21 @@ spike, @scure/@noble crypto, zod message protocol).
 **Phase 3 S5a (VAP grants core) — DONE (this session).**
 **Phase 3 S5b (grant negotiation + audit + rate limit) — DONE (this session).**
 **Phase 3 S5c (PIN-gated grant creation, VAP-01) — DONE (this session).**
+**Phase 3 S5d (WebAuthn grant confirmation, VAP-01 complete) — DONE (this session).**
+**Phase 3 audit view (settings list/verify/export) — DONE (this session).**
+**Phase 3 S6 stealth crypto foundation — DONE (this session).**
 
 ## Version control (FIXED this session)
 
-Repo now has git history on `main`: `2ea7e3e` (initial commit, 189 files) +
-`6c8069f` (S5c). Working on main directly (solo local repo, no remote); the
-"no git history" risk-register item is resolved.
+Repo now has git history on `main`: `2ea7e3e` (initial commit) → `6c8069f`
+(S5c) → `ed7243d` (S5d) → `d544702` (audit view) → `9e24762` (stealth).
+Working on main directly (solo local repo, no remote); the "no git history"
+risk-register item is resolved. Consider a remote/backup.
+
+## Verified green (complete `npm run gate:all`, Aug 15)
+
+- typecheck, lint (`--max-warnings 0`), vitest **316 pass / 40 files**, vite build,
+  bundle-size gate (5.4% of 5 MB), secret-leak gate.
 
 ## Verified green (complete `npm run gate:all`, Aug 15)
 
@@ -82,9 +91,31 @@ Repo now has git history on `main`: `2ea7e3e` (initial commit, 189 files) +
 - Gotcha: `approveDisabled` must not disable the idle-state button when PIN is
   required, or the countdown can never start.
 
+## S5d — WebAuthn grant confirmation (VAP-01 complete)
+
+- `core/vap/confirmation.ts`: pure `requireGrantConfirmation` gate (PIN-first,
+  WebAuthn fallback, none → hold only). Protocol `security.webauthn.challenge`;
+  `vap.grant.resolve` carries `webauthn` flag; background gates before settling.
+- `GrantApproval.tsx` runs the passkey ceremony after the 3s hold when
+  WebAuthn-only (`navigator.credentials` is UI-context; flag over privileged
+  resolve). Gotcha: exactOptionalPropertyTypes forbids passing undefined to an
+  optional key — build attempt objects conditionally.
+
+## Audit view + stealth foundation
+
+- `AuditView.tsx` (Settings → Audit): lists ledger entries, verifies the hash
+  chain, exports JSON. Uses `exportAudit`/`verifyAuditChain` directly (settings
+  has IndexedDB access — no protocol changes).
+- `core/privacy/stealth.ts`: §5.1 scheme — `generateStealthMeta`,
+  `deriveStealthAddress` (ECDH e·viewPub → H(S); address = spendPub + H(S)·G),
+  `recoverStealthSpendKey` (receiver), `stealthAddressToEvm`. Uses
+  `secp256k1.ProjectivePoint` (noble-curves 1.9 has no `Point` static).
+
 ## Next steps (Phase 3)
 
-- **S5d**: WebAuthn confirmation for grant creation (VAP-01 full); OperationService state machine + durable queue (3.2).
-- **S6**: privacy wiring — stealth addresses, encrypted notes, ZK shielded (testnet-gated).
-- **Phase 2 leftovers**: WalletConnect v2 (2.12); a few store-slice wirings (2.14); ErrorState/EmptyState everywhere (2.19).
-- **High risk**: repo now has git history on main (2 commits). Consider a remote/backup.
+- **S6 continued**: stealth announcements + scanner, encrypted notes (3.18-3.20);
+  stealth x402 wiring (3.22).
+- **VAP remainder**: OperationService state machine + durable queue (3.2);
+  gas policy (3.17).
+- **Phase 2 leftovers**: WalletConnect v2 (2.12); a few store-slice wirings (2.14).
+- **High risk**: repo now has git history on main (5 commits). Consider a remote/backup.

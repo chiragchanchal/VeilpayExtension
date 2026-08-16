@@ -151,6 +151,75 @@ describe('popup onboarding', () => {
     await user.click(screen.getByRole('button', { name: 'Create wallet' }));
     expect(await screen.findByText('Wallet created')).toBeInTheDocument();
   });
+
+  it('rejects a passphrase below the vault minimum on the passphrase step', async () => {
+    const user = userEvent.setup();
+    installResponder({
+      'vault.status': { state: 'uninitialized', unlockedUntil: null },
+      'zk.capability': null,
+      'mnemonic.generate': { mnemonic: VALID_PHRASE },
+    });
+
+    render(<App />);
+
+    await user.click(await screen.findByRole('button', { name: 'Create new wallet' }));
+    await user.click(await screen.findByRole('button', { name: 'Reveal recovery phrase' }));
+    await user.click(screen.getByRole('button', { name: "I've saved it" }));
+
+    const [first, second] = screen.getAllByPlaceholderText(/passphrase/i);
+    if (first === undefined || second === undefined) {
+      throw new Error('Expected two passphrase inputs.');
+    }
+    await user.type(first, 'short');
+    await user.type(second, 'short');
+
+    await user.click(screen.getByRole('button', { name: 'Create wallet' }));
+    expect(await screen.findByText('Passphrase must be at least 10 characters.')).toBeInTheDocument();
+    // Never submitted: still on the passphrase step, not the boot spinner.
+    expect(screen.queryByText('Loading wallet…')).not.toBeInTheDocument();
+  });
+
+  it('never shows the boot spinner while the import form is submitting', async () => {
+    // `vault.create` never resolves: while awaiting, the import form's own
+    // progress must render — NOT the page-level "Loading wallet…" gate (which
+    // previously hijacked the import flow because phrase stays null).
+    vi.mocked(chrome.runtime.sendMessage).mockImplementation(
+      (message: unknown) => {
+        const kind =
+          typeof message === 'object' &&
+          message !== null &&
+          'kind' in message
+            ? String((message as { kind: unknown }).kind)
+            : '';
+        if (kind === 'vault.create') return new Promise(() => {}) as never;
+        if (kind === 'vault.status') {
+          return Promise.resolve({
+            id: crypto.randomUUID(),
+            ok: true,
+            data: { state: 'uninitialized', unlockedUntil: null },
+          }) as never;
+        }
+        return Promise.resolve({ id: crypto.randomUUID(), ok: true, data: null }) as never;
+      },
+    );
+
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByRole('button', { name: 'Import existing wallet' }));
+    const phraseInput = await screen.findByPlaceholderText('Recovery phrase');
+    const nameInputs = screen.getAllByPlaceholderText(/passphrase/i);
+    await user.type(phraseInput, VALID_PHRASE);
+    await user.type(nameInputs[0]!, 'correct horse battery');
+    await user.type(nameInputs[1]!, 'correct horse battery');
+
+    await user.click(screen.getByRole('button', { name: 'Import wallet' }));
+
+    // While the create request is in flight, the popup stays on the import
+    // form (Importing…), NOT the boot loading spinner.
+    expect(screen.queryByText('Loading wallet…')).not.toBeInTheDocument();
+    expect(screen.getByText('Importing…')).toBeInTheDocument();
+  });
 });
 
 describe('popup unlocked dashboard', () => {

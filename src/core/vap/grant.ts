@@ -14,30 +14,12 @@
  */
 import { z } from 'zod';
 import { readMeta, writeMeta } from '@/core/vault/storage';
-import { ChainId } from '@/core/messaging/protocol';
+import { GrantCaps } from '@/core/messaging/protocol';
 
 const STORAGE_KEY = 'vap:grants';
 
-/** A non-negative integer as a decimal string (the bus form of `bigint`). */
-const Decimal = z.string().regex(/^\d+$/, 'Must be a non-negative integer.');
-
-export const GrantCaps = z.object({
-  /** Hard ceiling per single operation, in base units (wei). */
-  maxPerOperation: Decimal,
-  /** Rolling-window ceiling, in base units (wei). */
-  maxPerWindow: Decimal,
-  /** Window length in seconds (1 min – 1 year). */
-  windowSeconds: z.number().int().min(60).max(31_536_000),
-  /** Above this amount, force user approval even in autonomous mode. */
-  approvalThreshold: Decimal,
-  /** Operation types this grant permits. x402.pay is the only op today. */
-  allowedOps: z.array(z.literal('x402.pay')).min(1),
-  /** Chains payments may settle on. EVM (Sepolia) only today. */
-  allowedChains: z.array(ChainId).min(1),
-  /** Allowed recipients; empty = any (discouraged but simple). */
-  allowlist: z.array(z.string()),
-});
-export type GrantCaps = z.infer<typeof GrantCaps>;
+/** Re-exported so existing callers importing from `@/core/vap/grant` keep working. */
+export type { GrantCaps } from '@/core/messaging/protocol';
 
 export const Grant = z.object({
   id: z.string().min(1),

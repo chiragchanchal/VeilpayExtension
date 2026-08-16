@@ -49,4 +49,24 @@ describe('wallet startup refresh', () => {
     expect(calls.filter(([message]) => kindOf(message) === 'zk.capability')).toHaveLength(1);
     expect(useWallet.getState().isLoading).toBe(false);
   });
+
+  it('a failing optional pending-read does not pollute the global error', async () => {
+    // The four optional `loadPending*` reads run at boot alongside `refresh`.
+    // A timeout on one of them must not flip the popup to the error screen when
+    // the status read itself succeeded.
+    vi.mocked(chrome.runtime.sendMessage).mockImplementation(
+      () => Promise.reject(new Error('background not ready')) as never,
+    );
+
+    await useWallet.getState().loadPendingConnection();
+    await useWallet.getState().loadPendingApproval();
+    await useWallet.getState().loadPendingX402();
+    await useWallet.getState().loadPendingGrantRequest();
+
+    expect(useWallet.getState().error).toBeNull();
+    expect(useWallet.getState().pendingConnection).toBeNull();
+    expect(useWallet.getState().pendingApproval).toBeNull();
+    expect(useWallet.getState().pendingX402Payment).toBeNull();
+    expect(useWallet.getState().pendingGrantRequest).toBeNull();
+  });
 });

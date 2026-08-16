@@ -181,6 +181,26 @@ function messageFor(cause: unknown, fallback: string): string {
   return cause instanceof Error ? cause.message : fallback;
 }
 
+/**
+ * Reads vault status (required) and the ZK capability (cosmetic).
+ *
+ * The ZK probe result only drives a footer badge; a slow or failing
+ * `zk.capability` read must never block the wallet from rendering. vault.status
+ * is load-bearing and its failure rejects the whole refresh.
+ */
+async function readStatus(): Promise<
+  [{ state: VaultState; unlockedUntil: number | null }, ZkCapability | null]
+> {
+  const status = await send('vault.status', {});
+  let zk: ZkCapability | null = null;
+  try {
+    zk = await send('zk.capability', {});
+  } catch {
+    // Cosmetic read; keep boot moving.
+  }
+  return [status, zk];
+}
+
 export const useWallet = create<WalletState & WalletActions>((set, get) => ({
   vaultState: 'uninitialized',
   unlockedUntil: null,
@@ -201,17 +221,28 @@ export const useWallet = create<WalletState & WalletActions>((set, get) => ({
     refreshInFlight = (async () => {
       set({ isLoading: true, error: null });
       try {
-        const [status, zk] = await Promise.all([
-          send('vault.status', {}),
-          send('zk.capability', {}),
-        ]);
+        const [status, zk] = await readStatus();
         set({
           vaultState: status.state,
           unlockedUntil: status.unlockedUntil,
           zkCapability: zk,
         });
-      } catch (cause) {
-        set({ error: messageFor(cause, 'Could not read wallet status.') });
+      } catch (firstError) {
+        // Chrome can be slow to wake a cold service worker; the first status
+        // read occasionally times out before the SW registers. Retry once
+        // silently before surfacing an error so a slow cold start self-heals.
+        try {
+          await new Promise((resolve) => setTimeout(resolve, 600));
+          const [status, zk] = await readStatus();
+          set({
+            error: null,
+            vaultState: status.state,
+            unlockedUntil: status.unlockedUntil,
+            zkCapability: zk,
+          });
+        } catch {
+          set({ error: messageFor(firstError, 'Could not read wallet status.') });
+        }
       } finally {
         set({ isLoading: false });
         refreshInFlight = null;
@@ -287,12 +318,14 @@ export const useWallet = create<WalletState & WalletActions>((set, get) => ({
   },
 
   generateMnemonic: async (strength = 256) => {
-    set({ error: null });
+    set({ isLoading: true, error: null });
     try {
       return (await send('mnemonic.generate', { strength })).mnemonic;
     } catch (cause) {
       set({ error: messageFor(cause, 'Could not generate a recovery phrase.') });
       return null;
+    } finally {
+      set({ isLoading: false });
     }
   },
 
@@ -437,15 +470,15 @@ export const useWallet = create<WalletState & WalletActions>((set, get) => ({
   },
 
   loadPendingConnection: async () => {
-    set({ error: null });
     try {
       const pending = await send('permissions.pending', {});
       // Coalesce so the store invariant is `null | PendingConnection`, never
       // `undefined` — a malformed/absent response would otherwise crash the UI.
       set({ pendingConnection: pending ?? null });
-    } catch (cause) {
-      // A pending request is optional; a read failure is not fatal.
-      set({ error: messageFor(cause, 'Could not read the connection request.') });
+    } catch {
+      // A pending request is optional; a read failure is not fatal and must not
+      // flip the global error state (it races the boot-time `refresh`).
+      set({ pendingConnection: null });
     }
   },
 
@@ -464,14 +497,13 @@ export const useWallet = create<WalletState & WalletActions>((set, get) => ({
   },
 
   loadPendingApproval: async () => {
-    set({ error: null });
     try {
       const pending = await send('tx.pending', {});
       // Coalesce so the store invariant is `null | PendingApproval`.
       set({ pendingApproval: pending ?? null });
-    } catch (cause) {
-      // A pending approval is optional; a read failure is not fatal.
-      set({ error: messageFor(cause, 'Could not read the approval request.') });
+    } catch {
+      // Optional read; a failure must not pollute the global error state.
+      set({ pendingApproval: null });
     }
   },
 
@@ -490,14 +522,13 @@ export const useWallet = create<WalletState & WalletActions>((set, get) => ({
   },
 
   loadPendingX402: async () => {
-    set({ error: null });
     try {
       const pending = await send('x402.pending', {});
       // Coalesce so the store invariant is `null | PendingX402Payment`.
       set({ pendingX402Payment: pending ?? null });
-    } catch (cause) {
-      // A pending payment is optional; a read failure is not fatal.
-      set({ error: messageFor(cause, 'Could not read the payment request.') });
+    } catch {
+      // Optional read; a failure must not pollute the global error state.
+      set({ pendingX402Payment: null });
     }
   },
 
@@ -516,14 +547,13 @@ export const useWallet = create<WalletState & WalletActions>((set, get) => ({
   },
 
   loadPendingGrantRequest: async () => {
-    set({ error: null });
     try {
       const pending = await send('vap.grant.pending', {});
       // Coalesce so the store invariant is `null | PendingGrantRequest`.
       set({ pendingGrantRequest: pending ?? null });
-    } catch (cause) {
-      // A pending grant request is optional; a read failure is not fatal.
-      set({ error: messageFor(cause, 'Could not read the grant request.') });
+    } catch {
+      // Optional read; a failure must not pollute the global error state.
+      set({ pendingGrantRequest: null });
     }
   },
 

@@ -58,6 +58,11 @@ function makeChromeStub() {
       closeDocument: vi.fn(async () => undefined),
       Reason: { WORKERS: 'WORKERS' },
     },
+    contextMenus: {
+      removeAll: vi.fn(async () => undefined),
+      create: vi.fn(),
+      onClicked: { addListener: vi.fn() },
+    },
   };
 }
 

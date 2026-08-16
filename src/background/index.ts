@@ -1468,7 +1468,15 @@ async function handleInternalMessage(
  * validation, and answered BAD_REQUEST while the real handler ran anyway. One
  * listener with an explicit channel check removes that race.
  */
+// Startup marker. If you do not see this in chrome://extensions -> service
+// worker console, the SW bundle did not evaluate — check for errors above it.
+console.info('[veilpay] service worker module evaluating');
+let firstMessage = true;
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (firstMessage) {
+    firstMessage = false;
+    console.info('[veilpay] service worker received its first message');
+  }
   if (isInternalMessage(message)) {
     handleInternalMessage(message, sender).then(sendResponse, (cause: unknown) => {
       console.error('[veilpay] internal message failed', cause);
@@ -1489,6 +1497,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   });
   return true; // keep the channel open for the async response
 });
+console.info('[veilpay] service worker ready, message listener registered');
 
 /**
  * Idle relock.
@@ -1562,6 +1571,7 @@ async function runZkSpikeOnce(): Promise<void> {
 const ADDRESS_RE = /0x[a-fA-F0-9]{40}/;
 
 function buildContextMenu(): void {
+  if (chrome.contextMenus === undefined) return;
   chrome.contextMenus.removeAll();
   chrome.contextMenus.create({
     id: 'veilpay-send',
@@ -1583,6 +1593,10 @@ function buildContextMenu(): void {
   });
 }
 
+// Guarded: without the `contextMenus` permission this namespace is undefined,
+// and a bare module-scope call here would crash the service worker at
+// evaluation (the boot regression we fixed). Degrade to no context menu.
+if (chrome.contextMenus?.onClicked !== undefined) {
 chrome.contextMenus.onClicked.addListener(async (info) => {
   const selection = info.selectionText ?? '';
   const match = selection.match(ADDRESS_RE);
@@ -1620,5 +1634,6 @@ chrome.contextMenus.onClicked.addListener(async (info) => {
     }
   }
 });
+}
 
 console.info('[veilpay] service worker ready');

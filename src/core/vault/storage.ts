@@ -12,7 +12,7 @@ import type { EncryptedBlob } from './crypto';
 
 const DB_NAME = 'veilpay';
 export const DB_VERSION = 2;
-export const DB_OPEN_TIMEOUT_MS = 10_000;
+export const DB_OPEN_TIMEOUT_MS = 6_000;
 
 export interface VaultRecord {
   id: 'primary';
@@ -187,7 +187,11 @@ function openDatabase(): Promise<IDBPDatabase<VeilpaySchema>> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
-      reject(new Error('Veilpay storage could not open before the timeout.'));
+      reject(
+        new Error(
+          'Veilpay storage is busy (a stale connection may be blocking an upgrade). Retry, or Reload the extension.',
+        ),
+      );
     }, DB_OPEN_TIMEOUT_MS);
   });
 

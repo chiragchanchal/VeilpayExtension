@@ -11,6 +11,32 @@ import { X402Approval } from '@/ui/components/X402Approval';
 import { GrantApproval } from '@/ui/components/GrantApproval';
 import type { ZkCapability } from '@/core/messaging/protocol';
 
+const AUTO_RELOAD_KEY = 'bootAutoReloadedAt';
+const AUTO_RELOAD_WINDOW_MS = 60_000;
+
+/**
+ * One automatic recovery attempt for a stale/broken background service worker.
+ *
+ * If the popup boots to an error (SW never responded), Chrome may still be
+ * running an old service worker from a previous build. Reloading the extension
+ * re-registers the SW from the current `dist/`. Guarded by a per-session
+ * timestamp so it runs at most once a minute — a genuinely broken SW surfaces
+ * the manual Retry / Reload buttons instead of looping.
+ */
+async function maybeAutoReload(): Promise<boolean> {
+  try {
+    const stored = await chrome.storage.session.get(AUTO_RELOAD_KEY);
+    const last = stored[AUTO_RELOAD_KEY] as number | undefined;
+    const now = Date.now();
+    if (typeof last === 'number' && now - last < AUTO_RELOAD_WINDOW_MS) return false;
+    await chrome.storage.session.set({ [AUTO_RELOAD_KEY]: now });
+    chrome.runtime.reload();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 type OnboardingStep = 'welcome' | 'phrase' | 'passphrase' | 'success' | 'complete' | 'import';
 
 /**
@@ -81,6 +107,15 @@ export default function App() {
     void refresh();
   }, [refresh]);
 
+  // Load accounts once the vault is unlocked so the dashboard renders them.
+  // Without this a fresh popup shows "No accounts loaded" with no way to fix it
+  // (the dashboard's Refresh button only reloads balances, not the account list).
+  useEffect(() => {
+    if (vaultState === 'unlocked' && accounts.length === 0) {
+      void loadAccounts();
+    }
+  }, [vaultState, accounts.length, loadAccounts]);
+
   // A dapp connection request can land while the popup is closed (the background
   // opens it via chrome.action.openPopup). Reload it on mount so the approval UI
   // is rendered even if the popup started fresh.
@@ -102,6 +137,21 @@ export default function App() {
   useEffect(() => {
     void loadPendingGrantRequest();
   }, [loadPendingGrantRequest]);
+
+  // If the background service never answered while still on the WELCOME step
+  // (no create/import flow started), Chrome may be running a stale service
+  // worker. One automatic reload re-registers it from the current build; only
+  // fires on the initial load so a create/import error never nukes the form.
+  useEffect(() => {
+    if (
+      error !== null &&
+      vaultState === 'uninitialized' &&
+      phrase === null &&
+      step === 'welcome'
+    ) {
+      void maybeAutoReload();
+    }
+  }, [error, vaultState, phrase, step]);
 
   const handleApproveConnection = async () => {
     if (pendingConnection === null) return;
@@ -193,8 +243,11 @@ export default function App() {
   const handlePassphraseSubmit = async () => {
     setPassphraseError(null);
 
-    if (passphrase1.length < 8) {
-      setPassphraseError('Passphrase must be at least 8 characters.');
+    // Matches the vault's authoritative minimum (src/core/vault/index.ts,
+    // MIN_PASSPHRASE_LENGTH). The UI must not accept a passphrase the vault will
+    // reject, or the create flow fails after the user submits.
+    if (passphrase1.length < 10) {
+      setPassphraseError('Passphrase must be at least 10 characters.');
       return;
     }
     if (passphrase1 !== passphrase2) {
@@ -290,8 +343,8 @@ export default function App() {
 
   const handleImportSubmit = async () => {
     setImportError(null);
-    if (importPass1.length < 8) {
-      setImportError('Passphrase must be at least 8 characters.');
+    if (importPass1.length < 10) {
+      setImportError('Passphrase must be at least 10 characters.');
       return;
     }
     if (importPass1 !== importPass2) {
@@ -312,8 +365,13 @@ export default function App() {
     }
   };
 
-  // ── Loading ──────────────────────────────────────────────────────────────
-  if (isLoading && vaultState === 'uninitialized' && phrase === null) {
+  // ── Loading (INITIAL BOOT ONLY) ─────────────────────────────────────────
+  // Gate strictly to the boot state: once the user has picked an onboarding
+  // step (create/import) the step's own component renders its progress, and the
+  // page-level "Loading wallet…" spinner must NOT hijack it. Import never sets
+  // `phrase`, so without the step guard an in-flight `createVault` would swap
+  // the whole popup to the boot spinner.
+  if (isLoading && vaultState === 'uninitialized' && phrase === null && step === 'welcome') {
     return (
       <main className="flex min-h-[600px] w-[400px] flex-col items-center justify-center gap-3 p-4">
         <div className="h-8 w-8 animate-spin rounded-full border-2 border-accent-500 border-t-transparent" />
@@ -326,10 +384,15 @@ export default function App() {
   if (error && vaultState === 'uninitialized' && phrase === null) {
     return (
       <main className="flex min-h-[600px] w-[400px] flex-col items-center justify-center gap-4 p-4">
-        <p className="font-body text-sm text-danger">{error}</p>
-        <Button variant="secondary" onClick={() => refresh()}>
-          Retry
-        </Button>
+        <p className="font-body text-sm text-danger text-center">{error}</p>
+        <div className="flex gap-2">
+          <Button variant="secondary" onClick={() => refresh()}>
+            Retry
+          </Button>
+          <Button variant="ghost" onClick={() => chrome.runtime.reload()}>
+            Reload extension
+          </Button>
+        </div>
       </main>
     );
   }
@@ -589,8 +652,8 @@ export default function App() {
           <div className="flex flex-col gap-3">
             <Input
               type="password"
-              label="Passphrase (min. 8 characters)"
-              placeholder="Passphrase (min. 8 characters)"
+              label="Passphrase (min. 10 characters)"
+              placeholder="Passphrase (min. 10 characters)"
               value={passphrase1}
               onChange={(e) => {
                 setPassphrase1(e.target.value);
@@ -1000,8 +1063,8 @@ function ImportWallet({
         />
         <Input
           type="password"
-          label="New passphrase (min. 8 chars)"
-          placeholder="New passphrase (min. 8 chars)"
+          label="New passphrase (min. 10 chars)"
+          placeholder="New passphrase (min. 10 chars)"
           value={importPass1}
           onChange={(e) => onPass1Change(e.target.value)}
           passwordToggle

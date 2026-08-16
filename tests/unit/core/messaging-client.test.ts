@@ -22,8 +22,8 @@ describe('message client timeout', () => {
     );
     const promise = createClient('popup')('vault.status', {});
     const assertion = expect(promise).rejects.toMatchObject({
-      code: 'INTERNAL',
-      message: 'The wallet did not respond in time.',
+      code: 'BACKGROUND_UNREACHABLE',
+      message: expect.stringContaining('not responding'),
     });
     await vi.advanceTimersByTimeAsync(MESSAGE_TIMEOUT_MS);
     await assertion;
