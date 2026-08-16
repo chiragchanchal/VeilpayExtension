@@ -25,12 +25,23 @@ export interface OriginPermission {
 
 type PermissionsStore = OriginPermission[];
 
+function isOriginPermission(value: unknown): value is OriginPermission {
+  if (typeof value !== 'object' || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.origin === 'string' &&
+    Array.isArray(candidate.addresses) &&
+    candidate.addresses.every((a) => typeof a === 'string')
+  );
+}
+
 /**
  * Loads the full permission list from IndexedDB.
+ * Malformed/partial rows are dropped rather than propagated to the UI.
  */
 async function loadStore(): Promise<PermissionsStore> {
-  const stored = await readMeta<PermissionsStore>(STORAGE_KEY);
-  return Array.isArray(stored) ? stored : [];
+  const stored = await readMeta<unknown>(STORAGE_KEY);
+  return Array.isArray(stored) ? stored.filter(isOriginPermission) : [];
 }
 
 /**

@@ -172,18 +172,34 @@ export async function authenticateWebAuthn(
 // Storage helpers
 // ---------------------------------------------------------------------------
 
+const DEFAULT_SETTINGS: SecuritySettings = {
+  pinHash: null,
+  pinSalt: null,
+  webauthnCredentialId: null,
+  webauthnPublicKey: null,
+  webauthnEnabled: false,
+};
+
+function isSettings(value: unknown): value is SecuritySettings {
+  if (typeof value !== 'object' || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  // Pin fields may be null (unset) but must never be present-but-undefined:
+  // `pinHash !== null` is the "PIN configured" check, so an undefined value
+  // would silently flip that decision.
+  for (const key of ['pinHash', 'pinSalt', 'webauthnCredentialId', 'webauthnPublicKey']) {
+    const v = candidate[key];
+    if (v !== null && typeof v !== 'string') return false;
+  }
+  return typeof candidate.webauthnEnabled === 'boolean';
+}
+
 /**
  * Reads the current security settings from IndexedDB.
+ * Malformed/partial rows fall back to the defaults rather than propagating.
  */
 export async function readSettings(): Promise<SecuritySettings> {
-  const settings = await readMeta<SecuritySettings>(STORAGE_KEY);
-  return settings ?? {
-    pinHash: null,
-    pinSalt: null,
-    webauthnCredentialId: null,
-    webauthnPublicKey: null,
-    webauthnEnabled: false,
-  };
+  const stored = await readMeta<unknown>(STORAGE_KEY);
+  return isSettings(stored) ? stored : { ...DEFAULT_SETTINGS };
 }
 
 /**

@@ -13,8 +13,8 @@
  */
 import { keccak_256 } from '@noble/hashes/sha3';
 import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils';
-import { openStorageDatabase } from '@/core/vault/storage';
-import type { AuditLedgerRecord } from '@/core/vault/storage';
+import { readAuditEntries, tail, putAuditEntry } from '@/core/vault/repositories/audit-ledger';
+import type { AuditLedgerRecord } from '@/core/vault/storage-types';
 
 export type { AuditLedgerRecord };
 
@@ -34,16 +34,15 @@ export function computeEntryHash(
 
 /**
  * Appends an audit entry. Serializes against concurrent writers by reading the
- * current tail inside the same task as the put.
+ * current tail ahead of the put (through the audit-ledger repository, which
+ * rejects overwriting an existing sequence).
  */
 export async function appendAudit(
   operationType: string,
   sanitizedPayload: unknown,
   timestamp: number = Date.now(),
 ): Promise<AuditLedgerRecord> {
-  const db = await openStorageDatabase();
-  const records = await db.getAll('auditLedger');
-  const last = records.at(-1);
+  const last = await tail();
   const sequence = last === undefined ? 0 : last.sequence + 1;
   const previousHash = last?.entryHash ?? null;
 
@@ -56,7 +55,7 @@ export async function appendAudit(
     previousHash,
     entryHash: computeEntryHash(previousHash, { timestamp, operationType, sanitizedPayload }),
   };
-  await db.put('auditLedger', entry);
+  await putAuditEntry(entry);
   return entry;
 }
 
@@ -65,8 +64,7 @@ export async function appendAudit(
  * Returns the first broken sequence, or `valid: true`.
  */
 export async function verifyAuditChain(): Promise<{ valid: boolean; brokenAt?: number }> {
-  const db = await openStorageDatabase();
-  const records = await db.getAll('auditLedger');
+  const records = await readAuditEntries();
 
   let expectedPrevious: string | null = null;
   for (const record of records) {
@@ -84,6 +82,5 @@ export async function verifyAuditChain(): Promise<{ valid: boolean; brokenAt?: n
 
 /** Returns every entry, oldest first, for export. */
 export async function exportAudit(): Promise<AuditLedgerRecord[]> {
-  const db = await openStorageDatabase();
-  return db.getAll('auditLedger');
+  return readAuditEntries();
 }

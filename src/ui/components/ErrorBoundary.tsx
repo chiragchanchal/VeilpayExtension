@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react';
+import { t } from '@/i18n';
 import { Button } from '@/ui/components/Button';
 
 interface ErrorBoundaryProps {
@@ -36,8 +37,8 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
       }
       return (
         <ErrorState
-          title="Something went wrong"
-          message={this.state.error?.message ?? 'An unexpected error occurred.'}
+          title={t('errors.somethingWentWrong')}
+          message={this.state.error?.message ?? t('errors.unexpected')}
           onRetry={() => this.setState({ hasError: false, error: null })}
         />
       );

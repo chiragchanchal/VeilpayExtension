@@ -9,7 +9,11 @@ export type MessageKey =
   | `errors.${keyof EnglishMessages['errors']}`
   | `approval.${keyof EnglishMessages['approval']}`
   | `wallet.${keyof EnglishMessages['wallet']}`
+  | `onboarding.${keyof EnglishMessages['onboarding']}`
   | `status.${keyof EnglishMessages['status']}`
+  | `dashboard.${keyof EnglishMessages['dashboard']}`
+  | `settings.${keyof EnglishMessages['settings']}`
+  | `surfaces.${keyof EnglishMessages['surfaces']}`
   | `x402.${keyof EnglishMessages['x402']}`
   | `vap.${keyof EnglishMessages['vap']}`;
 

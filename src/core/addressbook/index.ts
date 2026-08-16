@@ -21,12 +21,24 @@ export interface AddressBookEntry {
   createdAt: number;
 }
 
+function isAddressBookEntry(value: unknown): value is AddressBookEntry {
+  if (typeof value !== 'object' || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.id === 'string' &&
+    typeof candidate.chain === 'string' &&
+    typeof candidate.label === 'string' &&
+    typeof candidate.address === 'string'
+  );
+}
+
 /**
  * Loads all address book entries.
+ * Malformed/partial rows are dropped rather than propagated to the UI.
  */
 export async function getAddressBook(): Promise<AddressBookEntry[]> {
-  const stored = await readMeta<AddressBookEntry[]>(STORAGE_KEY);
-  return Array.isArray(stored) ? stored : [];
+  const stored = await readMeta<unknown>(STORAGE_KEY);
+  return Array.isArray(stored) ? stored.filter(isAddressBookEntry) : [];
 }
 
 /**

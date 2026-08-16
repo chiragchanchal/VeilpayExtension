@@ -1,5 +1,13 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
 import type { EncryptedBlob } from './crypto';
+import type {
+  AuditLedgerRecord,
+  PrivacyCommitmentRecord,
+  SessionRecord,
+  TransactionRecord,
+  VaultRecord,
+  X402ChannelRecord,
+} from './storage-types';
 
 /**
  * Encrypted-at-rest storage for the vault.
@@ -14,68 +22,15 @@ const DB_NAME = 'veilpay';
 export const DB_VERSION = 2;
 export const DB_OPEN_TIMEOUT_MS = 6_000;
 
-export interface VaultRecord {
-  id: 'primary';
-  blob: EncryptedBlob;
-  createdAt: number;
-  updatedAt: number;
-}
-
-/** Typed contracts for the additive v2 stores. */
-export interface TransactionRecord {
-  id: string;
-  hash: string;
-  chain: string;
-  address: string;
-  from: string;
-  to: string;
-  amount: string;
-  network: string;
-  status: 'confirmed' | 'pending' | 'failed';
-  timestamp: string;
-  type: string;
-  raw?: unknown;
-}
-
-export interface X402ChannelRecord {
-  id: string;
-  channelId: string;
-  service: string;
-  limit: string;
-  spent: string;
-  expiration: number;
-  isActive: boolean;
-}
-
-export interface SessionRecord {
-  id: string;
-  sessionId: string;
-  createdAt: number;
-  lastActivityAt: number;
-  expiresAt: number;
-  userAddress: string;
-  metadata?: unknown;
-}
-
-export interface PrivacyCommitmentRecord {
-  id: string;
-  commitmentId: string;
-  nullifier: string;
-  secret: string;
-  amount: string;
-  token: string;
-  status: string;
-}
-
-export interface AuditLedgerRecord {
-  id: string;
-  sequence: number;
-  timestamp: number;
-  operationType: string;
-  sanitizedPayload: unknown;
-  previousHash: string | null;
-  entryHash: string;
-}
+export type {
+  AuditLedgerRecord,
+  PrivacyCommitmentRecord,
+  SessionRecord,
+  TransactionRecord,
+  VaultRecord,
+  X402ChannelRecord,
+  EncryptedBlob,
+};
 
 export interface VeilpaySchema extends DBSchema {
   vault: {

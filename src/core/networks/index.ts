@@ -23,12 +23,23 @@ export interface CustomNetwork {
   explorerUrl?: string;
 }
 
+function isCustomNetwork(value: unknown): value is CustomNetwork {
+  if (typeof value !== 'object' || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.chain === 'string' &&
+    typeof candidate.name === 'string' &&
+    typeof candidate.rpcUrl === 'string'
+  );
+}
+
 /**
  * Loads custom networks from IndexedDB.
+ * Malformed/partial rows are dropped rather than propagated to the UI.
  */
 export async function getCustomNetworks(): Promise<CustomNetwork[]> {
-  const stored = await readMeta<CustomNetwork[]>(STORAGE_KEY);
-  return Array.isArray(stored) ? stored : [];
+  const stored = await readMeta<unknown>(STORAGE_KEY);
+  return Array.isArray(stored) ? stored.filter(isCustomNetwork) : [];
 }
 
 /**

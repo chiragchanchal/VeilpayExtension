@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { t } from '@/i18n';
 import { useWallet } from '@/ui/store/useWallet';
 import { Button } from '@/ui/components/Button';
 import { Input } from '@/ui/components/Input';
@@ -35,14 +36,14 @@ export function SecuritySetup({
       return;
     }
     if (pin !== pinConfirm) {
-      setPinError('PINs do not match.');
+      setPinError(t('surfaces.pinsMismatch'));
       return;
     }
     const ok = await setupSecurityPin(pin);
     if (ok) {
       setStep('webauthn');
     } else {
-      setPinError('Could not set up the PIN. Try again.');
+      setPinError(t('surfaces.setPinError'));
     }
   };
 
@@ -66,12 +67,12 @@ export function SecuritySetup({
           <div className="flex h-12 w-12 items-center justify-center rounded-full bg-success/20">
             <span className="text-xl">✅</span>
           </div>
-          <h2 className="font-display text-lg font-semibold text-content-primary">Security setup complete</h2>
+          <h2 className="font-display text-lg font-semibold text-content-primary">{t('surfaces.setupComplete')}</h2>
           <p className="font-body text-sm text-content-secondary text-center max-w-xs">
-            Your wallet now has PIN protection. You can change these settings later.
+            {t('surfaces.setupCompleteHint')}
           </p>
           <Button fullWidth onClick={onComplete}>
-            Continue
+            {t('surfaces.continue')}
           </Button>
         </div>
       </main>

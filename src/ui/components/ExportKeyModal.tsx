@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { t } from '@/i18n';
 import { useWallet, type AccountView } from '@/ui/store/useWallet';
 import { Button } from '@/ui/components/Button';
 import { Card } from '@/ui/components/Card';
@@ -72,29 +73,28 @@ export function ExportKeyModal({
       setStep('show');
       await copyToClipboard(result.privateKey);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Could not export key.');
+      setError(cause instanceof Error ? cause.message : t('surfaces.couldNotExport'));
     }
   };
 
   if (step === 'confirm') {
     return (
-      <Card title="Export private key">
+      <Card title={t('surfaces.exportKeyTitle')}>
         <p className="font-body text-xs text-content-secondary mb-3">
-          Reveal the private key for your {account.chain} account?
+          {t('surfaces.exportKeyConfirmBody', { chain: account.chain })}
         </p>
         <p className="font-body text-xs text-content-tertiary mb-3">
-          Anyone with this key has full control of the account. Only export if you
-          are sure you need it (e.g. importing into another wallet).
+          {t('surfaces.exportKeyWarning')}
         </p>
         {error !== null && (
           <p className="font-body text-xs text-error mb-2">{error}</p>
         )}
         <div className="flex flex-col gap-2">
           <Button fullWidth onClick={handleExport}>
-            Export private key
+            {t('surfaces.exportKeyTitle')}
           </Button>
           <Button variant="ghost" size="sm" onClick={onClose}>
-            Cancel
+            {t('common.cancel')}
           </Button>
         </div>
       </Card>
@@ -102,9 +102,9 @@ export function ExportKeyModal({
   }
 
   return (
-    <Card title="Private key">
+    <Card title={t('surfaces.privateKeyTitle')}>
       <p className="font-body text-xs text-content-tertiary mb-3">
-        Copied to clipboard. Auto-clears after 30 seconds. Do not share it.
+        {t('surfaces.keyCopiedHint')}
       </p>
       <div className="rounded-lg bg-surface-900 p-3 font-mono text-xs text-content-primary break-all">
         {key}
@@ -114,10 +114,10 @@ export function ExportKeyModal({
       </p>
       <div className="mt-3 flex gap-2">
         <Button variant="secondary" size="sm" onClick={() => { if (key) void copyToClipboard(key); }}>
-          {copied ? 'Copied ✓' : 'Copy again'}
+          {copied ? t('surfaces.copied') : t('surfaces.copyAgain')}
         </Button>
         <Button variant="ghost" size="sm" onClick={onClose}>
-          Close
+          {t('common.close')}
         </Button>
       </div>
     </Card>

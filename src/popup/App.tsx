@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { t } from '@/i18n';
 import { useWallet, type AccountView } from '@/ui/store/useWallet';
 import { Button } from '@/ui/components/Button';
 import { Card } from '@/ui/components/Card';
@@ -247,15 +248,15 @@ export default function App() {
     // MIN_PASSPHRASE_LENGTH). The UI must not accept a passphrase the vault will
     // reject, or the create flow fails after the user submits.
     if (passphrase1.length < 10) {
-      setPassphraseError('Passphrase must be at least 10 characters.');
+      setPassphraseError(t('onboarding.passphraseMin'));
       return;
     }
     if (passphrase1 !== passphrase2) {
-      setPassphraseError('Passphrases do not match.');
+      setPassphraseError(t('onboarding.passphraseMismatch'));
       return;
     }
     if (phrase === null) {
-      setPassphraseError('No recovery phrase. Go back and create one.');
+      setPassphraseError(t('onboarding.noPhrase'));
       return;
     }
 
@@ -375,7 +376,7 @@ export default function App() {
     return (
       <main className="flex min-h-[600px] w-[400px] flex-col items-center justify-center gap-3 p-4">
         <div className="h-8 w-8 animate-spin rounded-full border-2 border-accent-500 border-t-transparent" />
-        <p className="font-body text-sm text-content-secondary">Loading wallet…</p>
+        <p className="font-body text-sm text-content-secondary">{t('status.loadingWallet')}</p>
       </main>
     );
   }
@@ -404,20 +405,20 @@ export default function App() {
     return (
       <main className="flex min-h-[600px] w-[400px] flex-col gap-4 p-4">
         <header className="flex items-baseline justify-between">
-          <h1 className="font-display text-lg font-bold text-content-primary">Veilpay</h1>
-          <span className="font-mono text-xs text-content-tertiary">v0.0.1</span>
+          <h1 className="font-display text-lg font-bold text-content-primary">{t('brand')}</h1>
+          <span className="font-mono text-xs text-content-tertiary">{t('version')}</span>
         </header>
 
         <div className="flex flex-1 flex-col items-center justify-center gap-4">
           <div className="flex h-12 w-12 items-center justify-center rounded-full bg-success/20">
             <span className="text-xl">✅</span>
           </div>
-          <h2 className="font-display text-lg font-semibold text-content-primary">Wallet created</h2>
+          <h2 className="font-display text-lg font-semibold text-content-primary">{t('onboarding.walletCreated')}</h2>
           <p className="font-body text-sm text-content-secondary text-center max-w-xs">
-            Your wallet is ready. You can now view your accounts and receive funds on testnet.
+            {t('onboarding.walletCreatedHint')}
           </p>
           <Button fullWidth onClick={handleFinishOnboarding}>
-            Continue to wallet
+            {t('onboarding.continue')}
           </Button>
         </div>
       </main>
@@ -517,8 +518,8 @@ export default function App() {
     return (
       <main className="flex min-h-[600px] w-[400px] flex-col gap-3 p-4">
         <header className="flex items-baseline justify-between">
-          <h1 className="font-display text-lg font-bold text-content-primary">Veilpay</h1>
-          <span className="font-mono text-xs text-content-tertiary">v0.0.1</span>
+          <h1 className="font-display text-lg font-bold text-content-primary">{t('brand')}</h1>
+          <span className="font-mono text-xs text-content-tertiary">{t('version')}</span>
         </header>
 
         <TestnetBanner />
@@ -547,21 +548,21 @@ export default function App() {
     return (
       <main className="flex min-h-[600px] w-[400px] flex-col gap-4 p-4">
         <header className="flex items-baseline justify-between">
-          <h1 className="font-display text-lg font-bold text-content-primary">Veilpay</h1>
-          <span className="font-mono text-xs text-content-tertiary">v0.0.1</span>
+          <h1 className="font-display text-lg font-bold text-content-primary">{t('brand')}</h1>
+          <span className="font-mono text-xs text-content-tertiary">{t('version')}</span>
         </header>
 
         <div className="flex flex-1 flex-col items-center justify-center gap-4">
           <div className="flex h-12 w-12 items-center justify-center rounded-full bg-surface-700">
             <span className="text-xl">🔒</span>
           </div>
-          <p className="font-body text-sm text-content-secondary">Wallet is locked</p>
+          <p className="font-body text-sm text-content-secondary">{t('wallet.locked')}</p>
 
           <div className="w-full max-w-xs">
             <Input
               type="password"
-              label="Passphrase"
-              placeholder="Passphrase"
+              label={t('wallet.passphrase')}
+              placeholder={t('wallet.passphrase')}
               value={unlockPassphrase}
               onChange={(e) => {
                 setUnlockPassphrase(e.target.value);
@@ -582,7 +583,7 @@ export default function App() {
             onClick={handleUnlock}
             disabled={isLoading || unlockPassphrase.length === 0}
           >
-            {isLoading ? 'Unlocking…' : 'Unlock'}
+            {isLoading ? t('wallet.unlocking') : t('wallet.unlock')}
           </Button>
 
           {error && (
@@ -636,17 +637,16 @@ export default function App() {
     return (
       <main className="flex min-h-[600px] w-[400px] flex-col gap-4 p-4">
         <header className="flex items-baseline justify-between">
-          <h1 className="font-display text-lg font-bold text-content-primary">Veilpay</h1>
-          <span className="font-mono text-xs text-content-tertiary">v0.0.1</span>
+          <h1 className="font-display text-lg font-bold text-content-primary">{t('brand')}</h1>
+          <span className="font-mono text-xs text-content-tertiary">{t('version')}</span>
         </header>
 
         <div className="flex flex-1 flex-col gap-4">
           <h2 className="font-display text-base font-semibold text-content-primary">
-            Set a passphrase
+            {t('onboarding.setPassphrase')}
           </h2>
           <p className="font-body text-xs text-content-secondary">
-            This passphrase encrypts your wallet on this device. It is not stored anywhere.
-            You will need it every time you unlock.
+            {t('onboarding.passphraseHint')}
           </p>
 
           <div className="flex flex-col gap-3">
@@ -679,14 +679,14 @@ export default function App() {
 
           <div className="flex gap-2">
             <Button variant="secondary" onClick={() => setStep('phrase')} disabled={isLoading}>
-              Back
+              {t('common.back')}
             </Button>
             <Button
               fullWidth
               onClick={handlePassphraseSubmit}
               disabled={isLoading || passphrase1.length === 0 || passphrase2.length === 0}
             >
-              {isLoading ? 'Creating…' : 'Create wallet'}
+              {isLoading ? t('onboarding.creating') : t('onboarding.create')}
             </Button>
           </div>
         </div>
@@ -701,25 +701,25 @@ export default function App() {
     return (
       <main className="flex min-h-[600px] w-[400px] flex-col gap-4 p-4">
         <header className="flex items-baseline justify-between">
-          <h1 className="font-display text-lg font-bold text-content-primary">Veilpay</h1>
-          <span className="font-mono text-xs text-content-tertiary">v0.0.1</span>
+          <h1 className="font-display text-lg font-bold text-content-primary">{t('brand')}</h1>
+          <span className="font-mono text-xs text-content-tertiary">{t('version')}</span>
         </header>
 
         <div className="flex flex-1 flex-col gap-4">
           <h2 className="font-display text-base font-semibold text-content-primary">
-            Recovery phrase
+            {t('onboarding.recoveryPhrase')}
           </h2>
           <p className="font-body text-xs text-content-secondary">
-            Write down these 24 words in order. This is the only way to recover your wallet.
+            {t('onboarding.phraseHint')}
           </p>
 
           {!phraseRevealed ? (
             <div className="flex flex-col items-center gap-3 py-4">
               <p className="font-body text-sm text-content-secondary text-center">
-                Make sure no one is looking at your screen.
+                {t('onboarding.phrasePrivacy')}
               </p>
               <Button variant="primary" onClick={handlePhraseRevealed}>
-                Reveal recovery phrase
+                {t('onboarding.revealPhrase')}
               </Button>
             </div>
           ) : (
@@ -742,7 +742,7 @@ export default function App() {
 
               <div className="flex gap-2">
                 <Button variant="secondary" onClick={handleCopyPhrase}>
-                  {phraseCopied ? 'Copied!' : 'Copy'}
+                  {phraseCopied ? 'Copied!' : t('common.copy')}
                 </Button>
                 <Button
                   variant="danger"
@@ -752,13 +752,13 @@ export default function App() {
                     setStep('welcome');
                   }}
                 >
-                  Start over
+                  {t('onboarding.startOver')}
                 </Button>
               </div>
 
               <div className="mt-auto">
                 <Button fullWidth onClick={handlePhraseConfirmed}>
-                  I've saved it
+                  {t('onboarding.savedPhrase')}
                 </Button>
               </div>
             </>
@@ -772,8 +772,8 @@ export default function App() {
   return (
     <main className="flex min-h-[600px] w-[400px] flex-col gap-3 p-4">
       <header className="flex items-baseline justify-between">
-        <h1 className="font-display text-lg font-bold text-content-primary">Veilpay</h1>
-        <span className="font-mono text-xs text-content-tertiary">v0.0.1</span>
+        <h1 className="font-display text-lg font-bold text-content-primary">{t('brand')}</h1>
+        <span className="font-mono text-xs text-content-tertiary">{t('version')}</span>
       </header>
 
       <TestnetBanner />
@@ -783,18 +783,18 @@ export default function App() {
           <span className="text-2xl">🛡</span>
         </div>
         <h2 className="font-display text-xl font-bold text-content-primary">
-          Welcome to Veilpay
+          {t('onboarding.welcome')}
         </h2>
         <p className="font-body text-sm text-content-secondary text-center max-w-xs">
-          A privacy-first wallet for the multi-chain world. Create a wallet to get started.
+          {t('onboarding.welcomeSubtitle')}
         </p>
 
         <Button fullWidth onClick={handleCreateWallet} disabled={isLoading}>
-          {isLoading ? 'Generating…' : 'Create new wallet'}
+          {isLoading ? t('onboarding.generating') : t('onboarding.createWallet')}
         </Button>
 
         <Button variant="ghost" onClick={() => { setStep('import'); setImportPhrase(''); setImportPass1(''); setImportPass2(''); setImportError(null); }}>
-          Import existing wallet
+          {t('onboarding.importExisting')}
         </Button>
       </div>
 
@@ -804,7 +804,7 @@ export default function App() {
           size="sm"
           onClick={() => void chrome.runtime.openOptionsPage()}
         >
-          Settings
+          {t('common.settings')}
         </Button>
       </div>
     </main>
@@ -888,8 +888,8 @@ function SendForm({
     return (
       <main className="flex min-h-[600px] w-[400px] flex-col gap-4 p-4">
         <header className="flex items-baseline justify-between">
-          <h1 className="font-display text-lg font-bold text-content-primary">Veilpay</h1>
-          <span className="font-mono text-xs text-content-tertiary">v0.0.1</span>
+          <h1 className="font-display text-lg font-bold text-content-primary">{t('brand')}</h1>
+          <span className="font-mono text-xs text-content-tertiary">{t('version')}</span>
         </header>
         <div className="flex flex-1 flex-col items-center justify-center gap-4">
           <div className="flex h-12 w-12 items-center justify-center rounded-full bg-success/20">
@@ -1048,15 +1048,15 @@ function ImportWallet({
 
       <div className="flex flex-1 flex-col gap-4">
         <h2 className="font-display text-base font-semibold text-content-primary">
-          Import wallet
+          {t('onboarding.import')}
         </h2>
         <p className="font-body text-xs text-content-secondary">
-          Enter your existing 12- or 24-word recovery phrase.
+          {t('onboarding.importHint')}
         </p>
 
         <Input
-          label="Recovery phrase"
-          placeholder="Recovery phrase"
+          label={t('onboarding.recoveryPhrase')}
+          placeholder={t('onboarding.recoveryPhrase')}
           value={importPhrase}
           onChange={(e) => onPhraseChange(e.target.value)}
           disabled={isLoading}
@@ -1083,14 +1083,14 @@ function ImportWallet({
 
         <div className="flex gap-2 mt-auto">
           <Button variant="secondary" onClick={onBack} disabled={isLoading}>
-            Back
+            {t('common.back')}
           </Button>
           <Button
             fullWidth
             onClick={onSubmit}
             disabled={isLoading || importPhrase.length === 0 || importPass1.length === 0 || importPass2.length === 0}
           >
-            {isLoading ? 'Importing…' : 'Import wallet'}
+            {isLoading ? t('onboarding.importing') : t('onboarding.import')}
           </Button>
         </div>
       </div>

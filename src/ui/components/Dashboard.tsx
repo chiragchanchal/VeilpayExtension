@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { t } from '@/i18n';
 import { useWallet, type AccountView } from '@/ui/store/useWallet';
 import { Button } from '@/ui/components/Button';
 import { Card } from '@/ui/components/Card';
@@ -84,9 +85,9 @@ export function Dashboard({
   return (
     <div className="flex flex-col gap-3">
       {/* Portfolio summary */}
-      <Card title="Portfolio">
+      <Card title={t('dashboard.portfolio')}>
         <div className="py-2 text-center">
-          <p className="font-body text-xs text-content-tertiary">Balances by chain</p>
+          <p className="font-body text-xs text-content-tertiary">{t('dashboard.balancesByChain')}</p>
           <div className="mt-1 flex flex-col gap-1">
             {(Object.keys(chainTotals) as AccountView['chain'][]).map((chain) => {
               const total = chainTotals[chain];
@@ -102,17 +103,17 @@ export function Dashboard({
             (chain) => (chainTotals[chain] ?? 0n) === 0n,
           ) && (
             <p className="font-body text-xs text-content-tertiary">
-              No balances to show.
+              {t('dashboard.noBalances')}
             </p>
           )}
         </div>
       </Card>
 
       {/* Asset list */}
-      <Card title="Assets">
+      <Card title={t('dashboard.assets')}>
         {accounts.length === 0 ? (
           <p className="font-body text-xs text-content-tertiary">
-            No accounts loaded. Press Refresh.
+            {t('dashboard.noAccounts')}
           </p>
         ) : (
           <ul className="flex flex-col gap-2">
@@ -132,18 +133,18 @@ export function Dashboard({
                       {formatBalance(bal, acc.chain)}
                     </span>
                     <Button variant="primary" size="sm" onClick={() => onSend(i)}>
-                      Send
+                      {t('common.send')}
                     </Button>
                     <Button variant="secondary" size="sm" onClick={() => onReceive(i)}>
-                      Receive
+                      {t('common.receive')}
                     </Button>
                     <Button
                       variant="ghost"
                       size="sm"
-                      aria-label={`Export ${acc.chain} private key`}
+                      aria-label={`${t('common.export')} ${acc.chain} private key`}
                       onClick={() => setExportAccount(acc)}
                     >
-                      Export
+                      {t('common.export')}
                     </Button>
                   </div>
                 </li>
@@ -153,24 +154,24 @@ export function Dashboard({
         )}
         <div className="mt-3 flex gap-2">
           <Button variant="secondary" size="sm" onClick={() => loadAllBalances()} disabled={isLoading}>
-            {isLoading ? 'Loading…' : 'Refresh'}
+            {isLoading ? t('common.loading') : t('common.refresh')}
           </Button>
           <Button variant="ghost" size="sm" onClick={onLock}>
-            Lock
+            {t('common.lock')}
           </Button>
           <Button variant="ghost" size="sm" onClick={onImport}>
-            Import
+            {t('common.import')}
           </Button>
         </div>
       </Card>
 
       {/* Recent transactions */}
-      <Card title="Recent Transactions">
+      <Card title={t('dashboard.recentTransactions')}>
         {txLoading ? (
-          <p className="font-body text-xs text-content-tertiary">Loading transactions…</p>
+          <p className="font-body text-xs text-content-tertiary">{t('dashboard.loadingTransactions')}</p>
         ) : txs.length === 0 ? (
           <p className="font-body text-xs text-content-tertiary">
-            No recent transactions found.
+            {t('dashboard.noRecent')}
           </p>
         ) : (
           <ul className="flex flex-col gap-2">

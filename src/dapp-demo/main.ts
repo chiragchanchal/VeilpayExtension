@@ -5,6 +5,7 @@
  * page (served by the Vite dev server) can call the real wallet end-to-end:
  * connect, approve, send, and sign. See ../dapp-demo.html for the layout.
  */
+import { createX402Interceptor } from '@/core/x402/interceptor';
 import { buildDemoSolanaTransfer } from '@/dapp-demo/wire';
 
 interface VeilpayProvider {
@@ -192,8 +193,20 @@ let x402Challenge: unknown = null;
 
 bind('btn-x402-fetch', async () => {
   const server = $<HTMLInputElement>('x402-server').value.trim().replace(/\/+$/, '');
-  const response = await fetch(`${server}/challenge`);
-  if (!response.ok) throw new Error(`Reference server responded ${response.status}.`);
+  // The interceptor annotates 402 responses with a parsed x402 challenge, so a
+  // real challenge arriving on WWW-Authenticate / X-402-Challenge is detected
+  // automatically rather than assumed from a JSON body.
+  const intercepted = createX402Interceptor(fetch);
+  const response = (await intercepted(`${server}/challenge`)) as Response & {
+    x402Challenge?: { scheme: 'x402' } & Record<string, unknown>;
+  };
+  if (response.status === 402 && response.x402Challenge !== undefined) {
+    x402Challenge = response.x402Challenge;
+    return {
+      note: '402 + x402 challenge detected by the interceptor. Click "Pay & replay" to approve and pay.',
+      challenge: response.x402Challenge,
+    };
+  }
   const data = (await response.json()) as { challenge: unknown };
   x402Challenge = data.challenge;
   return {

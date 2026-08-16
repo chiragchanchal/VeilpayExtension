@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { t } from '@/i18n';
 import { useWallet } from '@/ui/store/useWallet';
 import type { ChainId } from '@/core/messaging/protocol';
 import { Button } from '@/ui/components/Button';
@@ -54,16 +55,16 @@ export function SettingsLayout({ onClose }: { onClose?: () => void }) {
   };
 
   const tabs: { key: SettingsTab; label: string }[] = [
-    { key: 'general', label: 'General' },
-    { key: 'security', label: 'Security' },
-    { key: 'networks', label: 'Networks' },
-    { key: 'permissions', label: 'Permissions' },
-    { key: 'vap', label: 'VAP Grants' },
-    { key: 'addressbook', label: 'Address Book' },
-    { key: 'transactions', label: 'Transactions' },
-    { key: 'session', label: 'Session' },
-    { key: 'audit', label: 'Audit' },
-    { key: 'about', label: 'About' },
+    { key: 'general', label: t('settings.general') },
+    { key: 'security', label: t('settings.security') },
+    { key: 'networks', label: t('settings.networks') },
+    { key: 'permissions', label: t('settings.permissions') },
+    { key: 'vap', label: t('settings.vapGrants') },
+    { key: 'addressbook', label: t('settings.addressBook') },
+    { key: 'transactions', label: t('settings.transactions') },
+    { key: 'session', label: t('settings.session') },
+    { key: 'audit', label: t('settings.audit') },
+    { key: 'about', label: t('settings.about') },
   ];
 
   return (
@@ -86,7 +87,7 @@ export function SettingsLayout({ onClose }: { onClose?: () => void }) {
         ))}
         {onClose !== undefined && (
           <Button variant="ghost" size="sm" className="mt-auto" onClick={onClose}>
-            Close
+            {t('settings.close')}
           </Button>
         )}
       </nav>
@@ -127,22 +128,22 @@ function GeneralSettings() {
 
   return (
     <div className="flex flex-col gap-4">
-      <h2 className="font-display text-lg font-semibold text-content-primary">General</h2>
+      <h2 className="font-display text-lg font-semibold text-content-primary">{t('settings.general')}</h2>
 
-      <Card title="Wallet state">
+      <Card title={t('settings.walletState')}>
         <p className="font-body text-sm text-content-secondary">
           Status: <span className="font-semibold text-content-primary">{vaultState}</span>
         </p>
         {vaultState === 'unlocked' && (
           <Button variant="ghost" size="sm" className="mt-2" onClick={lock}>
-            Lock wallet
+            {t('settings.lockWallet')}
           </Button>
         )}
       </Card>
 
-      <Card title="Session timeout">
+      <Card title={t('settings.sessionTimeout')}>
         <p className="font-body text-sm text-content-secondary">
-          Auto-lock after 15 minutes of inactivity.
+          {t('settings.autoLockHint')}
         </p>
       </Card>
     </div>
@@ -160,20 +161,20 @@ function SecuritySettings({ hasPin, hasWebAuthn }: { hasPin: boolean; hasWebAuth
 
   return (
     <div className="flex flex-col gap-4">
-      <h2 className="font-display text-lg font-semibold text-content-primary">Security</h2>
+      <h2 className="font-display text-lg font-semibold text-content-primary">{t('settings.security')}</h2>
 
-      <Card title="PIN">
+      <Card title={t('settings.pin')}>
         <p className="font-body text-sm text-content-secondary">
-          {hasPin ? 'A PIN is configured.' : 'No PIN configured.'}
+          {hasPin ? t('settings.pinConfigured') : t('settings.noPin')}
         </p>
         <Button variant="ghost" size="sm" className="mt-2" onClick={() => setShowSetup(true)}>
-          {hasPin ? 'Change PIN' : 'Set up PIN'}
+          {hasPin ? t('settings.changePin') : t('settings.setUpPin')}
         </Button>
       </Card>
 
-      <Card title="WebAuthn">
+      <Card title={t('settings.webauthn')}>
         <p className="font-body text-sm text-content-secondary">
-          {hasWebAuthn ? 'A passkey is registered.' : 'No passkey registered.'}
+          {hasWebAuthn ? t('settings.passkeyRegistered') : t('settings.noPasskey')}
         </p>
       </Card>
     </div>
@@ -219,39 +220,39 @@ function NetworkSettings() {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
-        <h2 className="font-display text-lg font-semibold text-content-primary">Networks</h2>
+        <h2 className="font-display text-lg font-semibold text-content-primary">{t('settings.networks')}</h2>
         <Button variant="ghost" size="sm" onClick={() => setShowAdd(true)}>
-          Add custom
+          {t('settings.addCustom')}
         </Button>
       </div>
 
-      <Card title="EVM (Sepolia)">
-        <p className="font-body text-xs text-content-tertiary">Chain ID: 11155111</p>
+      <Card title={t('settings.evmSepolia')}>
+        <p className="font-body text-xs text-content-tertiary">{t('settings.chainId')}</p>
         <p className="font-body text-xs text-content-tertiary">RPC: sepolia.infura.io / sepolia.gateway.tenderly.co</p>
       </Card>
 
-      <Card title="Solana (Devnet)">
-        <p className="font-body text-xs text-content-tertiary">RPC: api.devnet.solana.com</p>
+      <Card title={t('settings.solanaDevnet')}>
+        <p className="font-body text-xs text-content-tertiary">{t('settings.rpc')}</p>
       </Card>
 
-      <Card title="Stellar (Testnet)">
-        <p className="font-body text-xs text-content-tertiary">RPC: horizon-testnet.stellar.org</p>
+      <Card title={t('settings.stellarTestnet')}>
+        <p className="font-body text-xs text-content-tertiary">{t('settings.rpcHorizon')}</p>
       </Card>
 
       {custom.map((n) => (
         <Card key={n.name} title={n.name}>
           <p className="font-body text-xs text-content-tertiary">{n.chain} — {n.rpcUrl}</p>
           <Button variant="ghost" size="sm" className="mt-1" onClick={() => handleRemove(n.name)}>
-            Remove
+            {t('settings.remove')}
           </Button>
         </Card>
       ))}
 
       {showAdd && (
-        <Card title="Add custom network">
+        <Card title={t('settings.addCustomNetwork')}>
           <div className="flex flex-col gap-2">
             <label className="flex flex-col gap-1">
-              <span className="font-body text-xs text-content-secondary">Chain</span>
+              <span className="font-body text-xs text-content-secondary">{t('settings.chain')}</span>
               <select
                 className="rounded-lg bg-surface-800 px-3 py-2 text-sm text-content-primary"
                 value={newChain}
@@ -263,19 +264,19 @@ function NetworkSettings() {
               </select>
             </label>
             <label className="flex flex-col gap-1">
-              <span className="font-body text-xs text-content-secondary">Network name</span>
+              <span className="font-body text-xs text-content-secondary">{t('settings.networkName')}</span>
               <input
                 className="rounded-lg bg-surface-800 px-3 py-2 text-sm text-content-primary"
-                placeholder="Network name"
+                placeholder={t('settings.networkName')}
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
               />
             </label>
             <label className="flex flex-col gap-1">
-              <span className="font-body text-xs text-content-secondary">RPC URL</span>
+              <span className="font-body text-xs text-content-secondary">{t('settings.rpcUrl')}</span>
               <input
                 className="rounded-lg bg-surface-800 px-3 py-2 text-sm text-content-primary"
-                placeholder="RPC URL"
+                placeholder={t('settings.rpcUrl')}
                 value={newUrl}
                 onChange={(e) => setNewUrl(e.target.value)}
               />
@@ -285,10 +286,10 @@ function NetworkSettings() {
             )}
             <div className="flex gap-2">
               <Button variant="secondary" size="sm" onClick={() => setShowAdd(false)}>
-                Cancel
+                {t('common.cancel')}
               </Button>
               <Button size="sm" onClick={handleAdd}>
-                Add
+                {t('settings.add')}
               </Button>
             </div>
           </div>
@@ -314,16 +315,16 @@ function PermissionsSettings({
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
-        <h2 className="font-display text-lg font-semibold text-content-primary">Permissions</h2>
+        <h2 className="font-display text-lg font-semibold text-content-primary">{t('settings.permissions')}</h2>
         <Button variant="ghost" size="sm" onClick={onRefresh} disabled={isLoading}>
-          Refresh
+          {t('common.refresh')}
         </Button>
       </div>
 
       {permissions.length === 0 ? (
-        <Card title="Connected dapps">
+        <Card title={t('settings.connectedDapps')}>
           <p className="font-body text-sm text-content-secondary">
-            No dapps have been granted access to your wallet.
+            {t('settings.noDapps')}
           </p>
         </Card>
       ) : (
@@ -332,7 +333,9 @@ function PermissionsSettings({
             <Card key={p.origin} title={p.origin}>
               <div className="flex flex-col gap-2">
                 <p className="font-body text-xs text-content-tertiary">
-                  {p.addresses.length} address{p.addresses.length !== 1 ? 'es' : ''} shared
+                  {p.addresses.length === 1
+                    ? t('settings.addressesSharedOne', { count: p.addresses.length })
+                    : t('settings.addressesSharedMany', { count: p.addresses.length })}
                 </p>
                 {p.addresses.slice(0, 3).map((addr) => (
                   <span key={addr} className="font-mono text-[10px] text-content-tertiary">
@@ -340,7 +343,7 @@ function PermissionsSettings({
                   </span>
                 ))}
                 <Button variant="ghost" size="sm" className="mt-1" onClick={() => onRevoke(p.origin)}>
-                  Revoke
+                  {t('settings.revoke')}
                 </Button>
               </div>
             </Card>
@@ -569,16 +572,16 @@ function VapGrantsSection() {
 function AboutSection() {
   return (
     <div className="flex flex-col gap-4">
-      <h2 className="font-display text-lg font-semibold text-content-primary">About</h2>
+      <h2 className="font-display text-lg font-semibold text-content-primary">{t('settings.about')}</h2>
 
-      <Card title="Veilpay">
+      <Card title={t('brand')}>
         <div className="flex flex-col gap-1">
-          <p className="font-body text-sm text-content-secondary">Version 0.0.1</p>
+          <p className="font-body text-sm text-content-secondary">{t('settings.version')}</p>
           <p className="font-body text-xs text-content-tertiary">
-            Self-custody multi-chain wallet with native agent payments and x402 support.
+            {t('settings.description')}
           </p>
           <p className="font-body text-xs text-content-tertiary mt-1">
-            Testnet only. Not for use with real funds.
+            {t('settings.testnetOnly')}
           </p>
         </div>
       </Card>

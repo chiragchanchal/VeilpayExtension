@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { t } from '@/i18n';
 import type { ChainId } from '@/core/messaging/protocol';
 import {
   getAddressBook,
@@ -36,12 +37,12 @@ export function AddressBookView() {
   const handleAdd = async () => {
     setError(null);
     if (!label || !address) {
-      setError('Label and address are required.');
+      setError(t('surfaces.labelAndAddressRequired'));
       return;
     }
     const ok = await addAddressBookEntry({ chain, label, address, ...(note ? { note } : {}) });
     if (!ok) {
-      setError('This address already exists on this chain.');
+      setError(t('surfaces.addressExists'));
       return;
     }
     await loadEntries();
@@ -65,7 +66,7 @@ export function AddressBookView() {
       setShowImport(false);
       setImportText('');
     } catch {
-      setError('Invalid JSON. Use an array of {chain, label, address} objects.');
+      setError(t('surfaces.invalidJson'));
     }
   };
 
@@ -86,24 +87,24 @@ export function AddressBookView() {
       </div>
 
       {showImport && (
-        <Card title="Import JSON">
+        <Card title={t('surfaces.importJson')}>
           <textarea
             className="w-full rounded-lg bg-surface-800 p-2 text-xs font-mono text-content-primary"
             rows={4}
-            placeholder='[{"chain":"evm","label":"Test","address":"0x..."}]'
+            placeholder={t('surfaces.importJsonPlaceholder')}
             value={importText}
             onChange={(e) => setImportText(e.target.value)}
           />
           {error !== null && <p className="font-body text-xs text-error mt-1">{error}</p>}
           <div className="flex gap-2 mt-2">
-            <Button variant="secondary" size="sm" onClick={() => setShowImport(false)}>Cancel</Button>
-            <Button size="sm" onClick={handleImport}>Import</Button>
+            <Button variant="secondary" size="sm" onClick={() => setShowImport(false)}>{t('common.cancel')}</Button>
+            <Button size="sm" onClick={handleImport}>{t('common.import')}</Button>
           </div>
         </Card>
       )}
 
       {showAdd && (
-        <Card title="Add address">
+        <Card title={t('surfaces.addAddress')}>
           <div className="flex flex-col gap-2">
             <select
               className="rounded-lg bg-surface-800 px-3 py-2 text-sm text-content-primary"

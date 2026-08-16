@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { ChainId } from '@/core/messaging/protocol';
-import { fetchTransactionHistory, type IndexerTx } from '@/core/chains/indexer-service';
+import { fetchTransactionHistoryCached, type IndexerTx } from '@/core/chains/indexer-service';
 import { useWallet } from '@/ui/store/useWallet';
 import { Button } from '@/ui/components/Button';
 import { EmptyState, ErrorState } from '@/ui/components/ErrorBoundary';
@@ -59,6 +59,7 @@ export function TransactionHistoryView() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<IndexerTx | null>(null);
+  const [source, setSource] = useState<'remote' | 'cache' | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -67,15 +68,20 @@ export function TransactionHistoryView() {
       setError(null);
       try {
         const all: IndexerTx[] = [];
+        let anyCached = false;
         for (const acc of accounts) {
-          const history = await fetchTransactionHistory(acc.chain, acc.address, 20);
+          const history = await fetchTransactionHistoryCached(acc.chain, acc.address, 20);
+          if (history.source === 'cache') anyCached = true;
           for (const tx of history.transactions) {
             all.push(tx);
           }
         }
         // Sort by timestamp descending (ISO-8601 strings compare lexicographically).
         all.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
-        if (!cancelled) setTxs(all);
+        if (!cancelled) {
+          setTxs(all);
+          setSource(anyCached ? 'cache' : 'remote');
+        }
       } catch (cause) {
         if (!cancelled) {
           setError(cause instanceof Error ? cause.message : 'Could not load transaction history.');
@@ -122,7 +128,10 @@ export function TransactionHistoryView() {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
-        <h2 className="font-display text-lg font-semibold text-content-primary">Transaction History</h2>
+        <h2 className="font-display text-lg font-semibold text-content-primary">Transaction History</h2>{' '}
+        {source === 'cache' && (
+          <span className="font-body text-xs text-content-tertiary">cached (backend unreachable)</span>
+        )}
         <div className="flex items-center gap-2">
           <Button variant="ghost" size="sm" onClick={handleExportCsv} disabled={filtered.length === 0}>
             Export CSV

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { t } from '@/i18n';
 import { useWallet } from '@/ui/store/useWallet';
 import { Button } from '@/ui/components/Button';
 import { Card } from '@/ui/components/Card';
@@ -28,7 +29,7 @@ export function SessionManagementView() {
         const secs = Math.floor((remaining % 60_000) / 1000);
         setTimeLeft(`${mins}m ${secs}s`);
       } else {
-        setTimeLeft('Locked');
+        setTimeLeft(t('surfaces.locked'));
       }
     };
 
@@ -39,9 +40,9 @@ export function SessionManagementView() {
 
   return (
     <div className="flex flex-col gap-4">
-      <h2 className="font-display text-lg font-semibold text-content-primary">Session</h2>
+      <h2 className="font-display text-lg font-semibold text-content-primary">{t('settings.session')}</h2>
 
-      <Card title="Wallet state">
+      <Card title={t('settings.walletState')}>
         <p className="font-body text-sm text-content-secondary">
           Status: <span className="font-semibold text-content-primary">{vaultState}</span>
         </p>
@@ -51,13 +52,13 @@ export function SessionManagementView() {
               Auto-lock in: <span className="font-mono text-content-primary">{timeLeft}</span>
             </p>
             <Button variant="ghost" size="sm" className="mt-2" onClick={lock}>
-              Lock wallet
+              {t('settings.lockWallet')}
             </Button>
           </>
         )}
       </Card>
 
-      <Card title="Auto-lock timeout">
+      <Card title={t('settings.sessionTimeout')}>
         <p className="font-body text-sm text-content-secondary">
           The wallet locks automatically after 15 minutes of inactivity. This prevents
           unauthorized access if you leave your device unattended.
