@@ -67,10 +67,16 @@ export default defineManifest({
 
   host_permissions: [
     // Testnet RPC only. Each entry is required for balance reads and broadcasts
-    // from the service worker; mainnet is deliberately absent.
+    // from the service worker; mainnet is deliberately absent. Multiple EVM
+    // endpoints are granted so fee estimation can fall back when a public node
+    // is rate-limited or down.
     'https://ethereum-sepolia-rpc.publicnode.com/*',
+    'https://sepolia.gateway.tenderly.co/*',
+    'https://1rpc.io/*',
     'https://api.devnet.solana.com/*',
     'https://horizon-testnet.stellar.org/*',
+    'https://friendbot.stellar.org/*', // testnet faucet (Stellar SDF)
+    'https://veilpay-qzz1.onrender.com/*', // transaction indexer backend
   ],
 
   content_security_policy: {

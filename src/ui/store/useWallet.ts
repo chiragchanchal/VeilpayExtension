@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { createClient } from '@/core/messaging/client';
 import type { ChainId, MessageSource, VaultState, ZkCapability } from '@/core/messaging/protocol';
+import type { IndexerTx } from '@/core/chains/indexer-service';
 import type { X402Challenge } from '@/core/x402/types';
 import type { GrantCaps } from '@/core/vap/grant';
 
@@ -105,6 +106,23 @@ interface WalletActions {
   loadAccounts(): Promise<void>;
   loadBalance(chain: ChainId, address: string): Promise<void>;
   loadAllBalances(): Promise<void>;
+  /** Requests testnet funds for a chain address via the background faucet. */
+  requestFaucet(chain: ChainId, address: string): Promise<{
+    ok: boolean;
+    txHash?: string;
+    error?: string;
+  }>;
+  /**
+   * Loads transaction history for one address through the background, which
+   * owns the fetch (the SW has host permissions; the popup does not, so a
+   * direct fetch from popup.html fails CORS). Falls back to the local cache
+   * when the indexer is unreachable.
+   */
+  loadHistory(chain: ChainId, address: string, limit?: number): Promise<{
+    transactions: IndexerTx[];
+    nextCursor: string | null;
+    source: 'remote' | 'cache';
+  }>;
   /**
    * A new phrase for the user to write down, or null if the request failed.
    *
@@ -315,6 +333,34 @@ export const useWallet = create<WalletState & WalletActions>((set, get) => ({
           ? null
           : `${failures} of ${settled.length} balances could not be fetched.`,
     });
+  },
+
+  requestFaucet: async (chain, address) => {
+    set({ error: null });
+    try {
+      return await send('faucet.request', { chain, address });
+    } catch (cause) {
+      const error = messageFor(cause, 'Could not request testnet funds.');
+      set({ error });
+      return { ok: false, error };
+    }
+  },
+
+  loadHistory: async (chain, address, limit = 20) => {
+    try {
+      const history = await send('indexer.history', { chain, address, limit });
+      // Coalesce so the store contract always holds, even for a malformed/
+      // absent response — consumers read `.transactions` right away.
+      return {
+        transactions: Array.isArray(history?.transactions) ? history.transactions : [],
+        nextCursor: history?.nextCursor ?? null,
+        source: history?.source ?? ('cache' as const),
+      };
+    } catch (cause) {
+      const msg = messageFor(cause, 'Could not load transaction history.');
+      set({ error: msg });
+      return { transactions: [], nextCursor: null, source: 'cache' as const };
+    }
   },
 
   generateMnemonic: async (strength = 256) => {

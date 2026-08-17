@@ -38,7 +38,8 @@ export type ErrorCode =
   | 'APPROVAL_TIMEOUT'
   | 'CHAIN_UNSUPPORTED'
   | 'X402_INVALID_CHALLENGE'
-  | 'PROMPT_RATE_LIMITED';
+  | 'PROMPT_RATE_LIMITED'
+  | 'TX_REJECTED';
 
 /** Thrown by handlers to produce a specific, display-safe error response. */
 export class ProtocolError extends Error {
@@ -187,6 +188,12 @@ export async function dispatch(
           id: request.id,
           ok: true,
           data: await handlers['account.balance'](request.payload, ctx),
+        };
+      case 'indexer.history':
+        return {
+          id: request.id,
+          ok: true,
+          data: await handlers['indexer.history'](request.payload, ctx),
         };
       case 'tx.estimate':
         return {
@@ -343,6 +350,12 @@ export async function dispatch(
           id: request.id,
           ok: true,
           data: await handlers['solana.signMessage'](request.payload, ctx),
+        };
+      case 'faucet.request':
+        return {
+          id: request.id,
+          ok: true,
+          data: await handlers['faucet.request'](request.payload, ctx),
         };
       case 'tx.pending':
         return {

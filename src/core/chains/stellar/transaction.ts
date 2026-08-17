@@ -113,6 +113,20 @@ function xdrArray(elements: Uint8Array[]): Uint8Array {
   return concat([xdrUint32(elements.length), ...elements]);
 }
 
+/**
+ * Encode the modern `Preconditions` union with nothing set (PRECOND_NONE = 0).
+ *
+ * Protocol 19+ restructured the transaction header: the legacy `TimeBounds*`
+ * optional pointer became a `Preconditions` union whose discriminant is a
+ * uint32. Horizon's decoder reads `operations` as an array whose length field
+ * follows preconditions — encoding the old 1-byte pointer shifts every
+ * subsequent field and the envelope fails with "could not decode". "No
+ * constraints" is a single uint32 discriminant 0 (no body).
+ */
+function xdrPreconditionsNone(): Uint8Array {
+  return xdrUint32(0); // PRECOND_NONE = 0
+}
+
 // ---------------------------------------------------------------------------
 // XDR encoding for Stellar native payment
 // ---------------------------------------------------------------------------
@@ -140,11 +154,22 @@ function xdrPaymentOp(destPubkey: Uint8Array, amount: bigint): Uint8Array {
 }
 
 /**
- * Encodes an Operation union (PAYMENT).
- * XDR: uint32 discriminant (PAYMENT = 1) + PaymentOp body.
+ * Encodes an Operation struct (PAYMENT).
+ *
+ * XDR:
+ *   struct Operation {
+ *     MuxedAccount* sourceAccount;  // optional pointer, u32; 0 = null
+ *     union switch (OperationType) { case PAYMENT: PaymentOp paymentOp; ... } body;
+ *   }
+ *
+ * XDR optional pointers are FOUR bytes, not one: the discriminant 0 (null) /
+ * 1 (present) is a uint32. Using a single byte shifts the whole operation and
+ * Horizon rejects the envelope as undecodable.
  */
 function xdrPaymentOperation(destPubkey: Uint8Array, amount: bigint): Uint8Array {
-  return concat([xdrUint32(1), xdrPaymentOp(destPubkey, amount)]);
+  const nullSourcePointer = xdrUint32(0); // MuxedAccount* = null
+  const body = concat([xdrUint32(1), xdrPaymentOp(destPubkey, amount)]); // PAYMENT = 1
+  return concat([nullSourcePointer, body]);
 }
 
 /**
@@ -163,8 +188,8 @@ function xdrTransaction(
   const feeXdr = xdrUint32(fee);
   // seqNum: uint64
   const seqNumXdr = xdrUint64(seqNum);
-  // timeBounds: TimeBounds* = null pointer (0)
-  const timeBounds = new Uint8Array([0x00]);
+  // preconditions: modern `Preconditions` union, PRECOND_NONE (no constraints).
+  const preconditions = xdrPreconditionsNone();
   // memo: MEMO_NONE = 0
   const memo = xdrUint32(0);
   // operations: Operation[] = [payment operation]
@@ -176,7 +201,7 @@ function xdrTransaction(
     sourceAccount,
     feeXdr,
     seqNumXdr,
-    timeBounds,
+    preconditions,
     memo,
     operations,
     ext,
@@ -230,9 +255,15 @@ export function signStellarPayment(
   const decoratedSignature = concat([hint, sigXdr]);
 
   // Build the TransactionEnvelope:
-  // tx: Transaction XDR
-  // signatures: DecoratedSignature[] = [decorated signature]
-  const envelope = concat([txXdr, xdrArray([decoratedSignature])]);
+  //   union TransactionEnvelope switch (EnvelopeType type) {
+  //     case ENVELOPE_TYPE_TX_V0: TransactionV0Envelope v0;
+  //     case ENVELOPE_TYPE_TX: TransactionV1Envelope v1;
+  //     case ENVELOPE_TYPE_TX_FEE_BUMP: FeeBumpTransactionEnvelope feeBump;
+  //   };
+  // The envelope body is preceded by the union discriminant (2 = TX v1).
+  // Omitting it misaligns the whole struct and Horizon cannot decode it.
+  const ENVELOPE_TYPE_TX = 2;
+  const envelope = concat([xdrUint32(ENVELOPE_TYPE_TX), txXdr, xdrArray([decoratedSignature])]);
 
   // Compute the from address
   const from = encodeStellarAddress(sourcePubkey);

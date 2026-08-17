@@ -64,6 +64,12 @@ function handlers(overrides: Partial<HandlerMap> = {}): HandlerMap {
     'permissions.connection': async () => ({ ok: true }),
     'tx.pending': async () => null,
     'tx.resolve': async () => ({ ok: true }),
+    'faucet.request': async () => ({ ok: true, txHash: 'hash' }),
+    'indexer.history': async () => ({
+      transactions: [],
+      nextCursor: null,
+      source: 'cache' as const,
+    }),
     'x402.pay': async () => ({ paymentHeader: 'dGVzdA==' }),
     'x402.resolve': async () => ({ ok: true }),
     'x402.pending': async () => null,

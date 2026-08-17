@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { ChainId } from '@/core/messaging/protocol';
-import { fetchTransactionHistoryCached, type IndexerTx } from '@/core/chains/indexer-service';
+import type { IndexerTx } from '@/core/chains/indexer-service';
 import { useWallet } from '@/ui/store/useWallet';
 import { Button } from '@/ui/components/Button';
 import { EmptyState, ErrorState } from '@/ui/components/ErrorBoundary';
@@ -53,7 +53,7 @@ function formatTimestamp(iso: string): string {
  * modal (block-explorer link) and CSV export of the visible rows.
  */
 export function TransactionHistoryView() {
-  const { accounts } = useWallet();
+  const { accounts, loadHistory } = useWallet();
   const [txs, setTxs] = useState<IndexerTx[]>([]);
   const [filterChain, setFilterChain] = useState<ChainId | 'all'>('all');
   const [isLoading, setIsLoading] = useState(true);
@@ -70,7 +70,7 @@ export function TransactionHistoryView() {
         const all: IndexerTx[] = [];
         let anyCached = false;
         for (const acc of accounts) {
-          const history = await fetchTransactionHistoryCached(acc.chain, acc.address, 20);
+          const history = await loadHistory(acc.chain, acc.address, 20);
           if (history.source === 'cache') anyCached = true;
           for (const tx of history.transactions) {
             all.push(tx);
@@ -92,7 +92,7 @@ export function TransactionHistoryView() {
     };
     void load();
     return () => { cancelled = true; };
-  }, [accounts]);
+  }, [accounts, loadHistory]);
 
   const filtered = filterChain === 'all' ? txs : txs.filter((tx) => tx.chain === filterChain);
 

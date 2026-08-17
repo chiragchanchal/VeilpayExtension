@@ -980,12 +980,36 @@ function ReceiveView({
   account: AccountView;
   onBack: () => void;
 }) {
+  const { requestFaucet } = useWallet();
+  const [faucetState, setFaucetState] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  const [faucetError, setFaucetError] = useState<string | null>(null);
+  const [faucetTxHash, setFaucetTxHash] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
   const handleCopy = () => {
     void navigator.clipboard.writeText(account.address);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleFaucet = async () => {
+    setFaucetState('loading');
+    setFaucetError(null);
+    setFaucetTxHash(null);
+    const result = await requestFaucet(account.chain, account.address);
+    if (result.ok) {
+      setFaucetState('success');
+      setFaucetTxHash(result.txHash ?? null);
+    } else {
+      setFaucetState('error');
+      setFaucetError(result.error ?? 'Could not request testnet funds.');
+    }
+  };
+
+  const faucetHint: Record<string, string> = {
+    evm: 'Funds arrive automatically after clicking — Sepolia ETH is limited by public faucets.',
+    solana: '0.1 SOL is airdropped to this devnet address.',
+    stellar: 'Friendbot funds this testnet address (10,000 XLM).',
   };
 
   return (
@@ -1007,7 +1031,27 @@ function ReceiveView({
         <Button fullWidth onClick={handleCopy}>
           {copied ? 'Copied!' : 'Copy address'}
         </Button>
-        <Button variant="secondary" fullWidth onClick={onBack}>
+
+        <div className="w-full">
+          <Button fullWidth variant="secondary" onClick={handleFaucet} disabled={faucetState === 'loading'}>
+            {faucetState === 'loading' ? 'Requesting testnet funds…' : 'Get testnet funds'}
+          </Button>
+          <p className="mt-2 font-body text-xs text-content-tertiary text-center">{faucetHint[account.chain]}</p>
+
+          {faucetState === 'success' && faucetTxHash !== null && (
+            <p className="mt-2 font-mono text-[10px] text-success break-all text-center">
+              Requested. Tx: {faucetTxHash.slice(0, 18)}…
+            </p>
+          )}
+          {faucetState === 'success' && faucetTxHash === null && (
+            <p className="mt-2 font-body text-xs text-success text-center">Funds requested.</p>
+          )}
+          {faucetState === 'error' && (
+            <p className="mt-2 font-body text-xs text-danger text-center">{faucetError}</p>
+          )}
+        </div>
+
+        <Button variant="ghost" fullWidth onClick={onBack}>
           Back
         </Button>
       </div>

@@ -4,7 +4,7 @@ import { useWallet, type AccountView } from '@/ui/store/useWallet';
 import { Button } from '@/ui/components/Button';
 import { Card } from '@/ui/components/Card';
 import { ExportKeyModal } from '@/ui/components/ExportKeyModal';
-import { fetchTransactionHistory, type IndexerTx } from '@/core/chains/indexer-service';
+import type { IndexerTx } from '@/core/chains/indexer-service';
 
 function formatBalance(balance: bigint, chain: string): string {
   switch (chain) {
@@ -44,19 +44,21 @@ export function Dashboard({
   onImport: () => void;
   onLock: () => void;
 }) {
-  const { balances, loadAllBalances, isLoading } = useWallet();
+  const { balances, loadAllBalances, isLoading, loadHistory } = useWallet();
   const [txs, setTxs] = useState<IndexerTx[]>([]);
   const [txLoading, setTxLoading] = useState(false);
   /** Account whose key export modal is open, if any. */
   const [exportAccount, setExportAccount] = useState<AccountView | null>(null);
 
-  // Load balances and tx history on mount.
+  // Load balances and tx history on mount. History goes through the background
+  // (message bus) — the SW holds host permissions, so a direct fetch from the
+  // popup would be blocked by CORS.
   useEffect(() => {
     void loadAllBalances();
     if (accounts.length > 0) {
       setTxLoading(true);
       void Promise.allSettled(
-        accounts.map((acc) => fetchTransactionHistory(acc.chain, acc.address, 5)),
+        accounts.map((acc) => loadHistory(acc.chain, acc.address, 5)),
       ).then((results) => {
         const all: IndexerTx[] = [];
         for (const r of results) {
@@ -69,7 +71,7 @@ export function Dashboard({
         setTxLoading(false);
       });
     }
-  }, [accounts, loadAllBalances]);
+  }, [accounts, loadAllBalances, loadHistory]);
 
   // Per-chain totals in that chain's own native units. Summing base units across
   // chains into one figure (wei + lamports + stroops) and labeling it a single

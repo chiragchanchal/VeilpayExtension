@@ -235,7 +235,7 @@ describe('Chain Services', () => {
       expect(seq).toBe(BigInt(456));
     });
 
-    it('propagates Horizon HTTP errors', async () => {
+    it('treats a 404 (never-funded account) as a zero balance', async () => {
       const service = createStellarService();
 
       fetchMock.mockResolvedValueOnce({
@@ -243,9 +243,55 @@ describe('Chain Services', () => {
         status: 404,
       });
 
+      // Horizon returns 404 for addresses that have never been funded — that is
+      // a fresh account (0 balance / no sequence), not an error.
+      expect(await service.getBalance('GDZST3XVCDTUJ76ZAV2HA72KYQJPOTPXP4NO5WYOXQJ5FNJR7G64AAAA')).toBe(0n);
+      fetchMock.mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+      });
+      expect(await service.getSequence('GDZST3XVCDTUJ76ZAV2HA72KYQJPOTPXP4NO5WYOXQJ5FNJR7G64AAAA')).toBe(0n);
+    });
+
+    it('propagates non-404 Horizon HTTP errors', async () => {
+      const service = createStellarService();
+
+      fetchMock.mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+      });
+
       await expect(service.getBalance('GDZST3XVCDTUJ76ZAV2HA72KYQJPOTPXP4NO5WYOXQJ5FNJR7G64AAAA')).rejects.toThrow(
-        /HTTP 404/,
+        /HTTP 500/,
       );
+    });
+
+    it('reports an unfunded account as not funded (isFunded=false)', async () => {
+      const service = createStellarService();
+      const funded = service.isFunded as ((a: string) => Promise<boolean>) | undefined;
+      expect(funded).toBeTypeOf('function');
+      const isFunded = (funded as (a: string) => Promise<boolean>).bind(service);
+
+      fetchMock.mockResolvedValueOnce({ ok: false, status: 404 });
+      expect(await isFunded('GDZST3XVCDTUJ76ZAV2HA72KYQJPOTPXP4NO5WYOXQJ5FNJR7G64AAAA')).toBe(false);
+
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ balances: [], sequence: '456' }),
+      });
+      expect(await isFunded('GDZST3XVCDTUJ76ZAV2HA72KYQJPOTPXP4NO5WYOXQJ5FNJR7G64AAAA')).toBe(true);
+    });
+
+    it('surfaces Horizon transaction rejection detail (not just the HTTP code)', async () => {
+      const service = createStellarService();
+
+      fetchMock.mockResolvedValueOnce({
+        ok: false,
+        status: 400,
+        json: async () => ({ detail: 'tx_bad_seq: bad sequence', title: 'Transaction Failed' }),
+      });
+
+      await expect(service.sendTransaction('xdr_base64_string')).rejects.toThrow(/tx_bad_seq/);
     });
   });
 

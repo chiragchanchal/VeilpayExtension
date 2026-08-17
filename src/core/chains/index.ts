@@ -20,6 +20,9 @@ export interface ChainService {
   /** Get the balance of an address in the chain's native unit (wei, lamports, stroops). */
   getBalance(address: string): Promise<bigint>;
 
+  /** Whether the address exists on-chain (funded). Stellar: 404 means unfunded. */
+  isFunded?(address: string): Promise<boolean>;
+
   /**
    * Estimate gas or compute units for a transaction.
    * For EVM, returns gas in units; for Solana, returns the fee in lamports.
@@ -94,7 +97,16 @@ export function createChainService(chain: Chain, rpcUrl?: string): ChainService 
 class EvmService implements ChainService {
   readonly chain = 'evm';
 
-  constructor(private rpcUrl: string) {}
+  /** Public RPC fallbacks for balance/nonce/send so a rate-limited node does
+   *  not brick the wallet. Mirrors SEPOLIA_FEE_ENDPOINTS. */
+  private static ENDPOINTS = [
+    'https://ethereum-sepolia-rpc.publicnode.com',
+    'https://sepolia.gateway.tenderly.co',
+    'https://1rpc.io/sepolia',
+  ];
+  private endpointIndex = 0;
+
+  constructor(private rpcUrl?: string) {}
 
   async getBalance(address: string): Promise<bigint> {
     const response = await this.call('eth_getBalance', [address, 'latest']);
@@ -132,41 +144,53 @@ class EvmService implements ChainService {
   }
 
   private async call(method: string, params: unknown[]): Promise<unknown> {
-    const response = await fetch(this.rpcUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: 1,
-        method,
-        params,
-      }),
-    });
+    const endpoints =
+      this.rpcUrl !== undefined && this.rpcUrl.length > 0
+        ? [this.rpcUrl]
+        : EvmService.ENDPOINTS;
 
-    if (!response.ok) {
-      throw new Error(`EVM RPC ${method} failed: HTTP ${response.status}`);
+    let lastError: Error | null = null;
+    for (let i = 0; i < endpoints.length; i += 1) {
+      const idx = (this.endpointIndex + i) % endpoints.length;
+      const url = endpoints[idx];
+      if (url === undefined || url.length === 0) continue;
+      try {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+        });
+
+        if (!response.ok) {
+          throw new Error(`EVM RPC ${method} failed: HTTP ${response.status}`);
+        }
+
+        const data = (await response.json()) as unknown;
+        if (typeof data !== 'object' || data === null) {
+          throw new Error(`EVM RPC ${method} returned a non-object response.`);
+        }
+
+        // RPC error responses are valid JSON-RPC even without `result`.
+        const err = (data as { error?: unknown }).error;
+        if (err !== undefined && err !== null) {
+          const message =
+            typeof err === 'object' && err !== null && 'message' in err
+              ? String((err as { message: unknown }).message)
+              : JSON.stringify(err);
+          throw new Error(`EVM RPC ${method} error: ${message}`);
+        }
+
+        if (!('result' in data)) {
+          throw new Error(`EVM RPC ${method} returned no result.`);
+        }
+        this.endpointIndex = idx;
+        return (data as unknown as { result: unknown }).result;
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+        // Try the next endpoint.
+      }
     }
-
-    const data = (await response.json()) as unknown;
-    if (
-      typeof data !== 'object' ||
-      data === null ||
-      !('result' in data) ||
-      !('jsonrpc' in data)
-    ) {
-      throw new Error(`EVM RPC ${method} returned invalid JSON-RPC: ${JSON.stringify(data)}`);
-    }
-
-    if ('error' in data && data.error !== null) {
-      const err = data.error;
-      const message =
-        typeof err === 'object' && err !== null && 'message' in err
-          ? String(err.message)
-          : JSON.stringify(err);
-      throw new Error(`EVM RPC ${method} error: ${message}`);
-    }
-
-    return (data as unknown as { result: unknown }).result;
+    throw lastError ?? new Error(`EVM RPC ${method} failed on all endpoints.`);
   }
 }
 
@@ -279,24 +303,46 @@ class StellarService implements ChainService {
 
   constructor(private horizonUrl: string) {}
 
-  async getBalance(address: string): Promise<bigint> {
+  async isFunded(address: string): Promise<boolean> {
+    return (await this.fetchAccount(address)) !== 'notFunded';
+  }
+
+  /**
+   * Horizon returns HTTP 404 for an address that has never been funded —
+   * Stellar accounts only exist on-chain once created. A 404 is therefore the
+   * "fresh empty account" case, not an error.
+   */
+  private async fetchAccount(address: string): Promise<
+    { balances: unknown[]; sequence: string } | 'notFunded'
+  > {
     const response = await fetch(`${this.horizonUrl}/accounts/${address}`);
+    if (response.status === 404) return 'notFunded';
     if (!response.ok) {
       throw new Error(`Horizon /accounts/${address} failed: HTTP ${response.status}`);
     }
 
     const data = (await response.json()) as unknown;
-    if (
-      typeof data !== 'object' ||
-      data === null ||
-      !('balances' in data) ||
-      !Array.isArray((data as unknown as { balances: unknown }).balances)
-    ) {
+    if (typeof data !== 'object' || data === null) {
       throw new Error(`Horizon account returned unexpected shape: ${JSON.stringify(data)}`);
     }
+    const record = data as { balances?: unknown; sequence?: unknown };
+    if (record.balances !== undefined && !Array.isArray(record.balances)) {
+      throw new Error(`Horizon account returned unexpected shape: ${JSON.stringify(data)}`);
+    }
+    if (record.sequence !== undefined && typeof record.sequence !== 'string') {
+      throw new Error(`Horizon sequence is not a string: ${typeof record.sequence}`);
+    }
+    return {
+      balances: (record.balances as unknown[]) ?? [],
+      sequence: (record.sequence as string) ?? '0',
+    };
+  }
 
-    const balances = (data as unknown as { balances: unknown[] }).balances;
-    const nativeBalance = balances.find(
+  async getBalance(address: string): Promise<bigint> {
+    const account = await this.fetchAccount(address);
+    if (account === 'notFunded') return 0n;
+
+    const nativeBalance = account.balances.find(
       (b) =>
         typeof b === 'object' &&
         b !== null &&
@@ -337,7 +383,20 @@ class StellarService implements ChainService {
     });
 
     if (!response.ok) {
-      throw new Error(`Horizon /transactions POST failed: HTTP ${response.status}`);
+      // Horizon returns a JSON body with a human `detail` (e.g. tx_bad_seq).
+      // Surface it so a failed submit is diagnosable instead of a bare HTTP code.
+      let detail = '';
+      try {
+        const body = (await response.json()) as unknown;
+        if (typeof body === 'object' && body !== null && 'detail' in body) {
+          detail = String((body as { detail: unknown }).detail);
+        }
+      } catch {
+        // Body wasn't JSON; leave detail empty.
+      }
+      throw new Error(
+        `Horizon /transactions POST failed: HTTP ${response.status}${detail ? ` — ${detail}` : ''}`,
+      );
     }
 
     const data = (await response.json()) as unknown;
@@ -354,22 +413,13 @@ class StellarService implements ChainService {
   }
 
   async getSequence(address: string): Promise<bigint> {
-    const response = await fetch(`${this.horizonUrl}/accounts/${address}`);
-    if (!response.ok) {
-      throw new Error(`Horizon /accounts/${address} failed: HTTP ${response.status}`);
-    }
-
-    const data = (await response.json()) as unknown;
-    if (typeof data !== 'object' || data === null || !('sequence' in data)) {
-      throw new Error(`Horizon account returned unexpected shape: ${JSON.stringify(data)}`);
-    }
-
-    const sequence = (data as unknown as { sequence: unknown }).sequence;
-    if (typeof sequence !== 'string') {
-      throw new Error(`Horizon sequence is not a string: ${typeof sequence}`);
-    }
-
-    return BigInt(sequence);
+    const account = await this.fetchAccount(address);
+    // A not-yet-funded account has no chain state yet; its first operation must
+    // be a create-account (via Friendbot). Treated as sequence 0. At send time
+    // the submit will fail with the network's insufficient-funds error, which is
+    // the correct, honest failure for an unfunded address.
+    if (account === 'notFunded') return 0n;
+    return BigInt(account.sequence);
   }
 }
 

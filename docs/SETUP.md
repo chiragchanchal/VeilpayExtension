@@ -211,23 +211,13 @@ Veilpayextension/
 
 ## Environment Variables
 
-Create `.env.local` (not committed):
+Copy `.env.example` to `.env.local` (not committed). Vite exposes only `VITE_`-prefixed variables to the browser bundle, and secrets must never go in env — key material lives in the encrypted IndexedDB vault.
 
-```env
-# Vault master seed (DEV ONLY, never in production)
-VITE_DEV_MASTER_SEED=0x...
-
-# RPC endpoint (Phase 2)
-VITE_RPC_URL=https://eth.publicnode.com
-
-# Privacy service URL (Phase 2, if needed)
-VITE_PRIVACY_SERVICE_URL=https://...
+```bash
+cp .env.example .env.local
 ```
 
-Access in code:
-```typescript
-const masterSeed = import.meta.env.VITE_DEV_MASTER_SEED;
-```
+The only variable the current build reads is `VITE_INDEXER_URL` (the transaction-history backend). The upstream Veilpay app repo (github.com/Veilpayapp/VEILPAY-APP) is an Expo mobile app that uses `EXPO_PUBLIC_*`; this browser extension uses `VITE_*` instead. RPC endpoints are pinned in the manifest (testnet-only), so no RPC env is needed until Phase 5 mainnet work.
 
 ## Troubleshooting
 

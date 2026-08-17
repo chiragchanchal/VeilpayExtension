@@ -2,6 +2,7 @@ import { dispatch, ProtocolError, type HandlerMap } from '@/core/messaging/route
 import * as vault from '@/core/vault';
 import { readMeta, writeMeta } from '@/core/vault/storage';
 import { createChainService, TESTNET_ENDPOINTS } from '@/core/chains';
+import { fetchTransactionHistoryCached } from '@/core/chains/indexer-service';
 import { ZkCapability, type ChainId } from '@/core/messaging/protocol';
 import { RpcFeeSource, estimateTransferFee } from '@/core/chains/evm/fees';
 import {
@@ -55,6 +56,7 @@ import {
   X402VaultLockedApprovalError,
 } from '@/background/x402-approval';
 import { validateChallenge } from '@/core/x402/challenge';
+import { requestTestnetFaucet } from '@/core/chains/faucet';
 import { signPaymentPayload } from '@/core/x402/payment';
 import {
   getActiveGrantByOrigin,
@@ -148,6 +150,21 @@ const handlers: HandlerMap = {
   },
 
   /**
+   * Transaction history. Runs here, in the service worker, because host
+   * permissions grant cross-origin fetch access in this context only —
+   * extension pages (popup/sidepanel/options) are subject to CORS like any web
+   * page. The UI receives history over the typed bus instead of fetching it.
+   */
+  'indexer.history': async (payload) => {
+    const history = await fetchTransactionHistoryCached(
+      payload.chain,
+      payload.address,
+      payload.limit,
+    );
+    return history;
+  },
+
+  /**
    * Fee preview for a transfer. Nothing is broadcast; the UI shows this before
    * asking the user to confirm.
    *
@@ -172,7 +189,7 @@ const handlers: HandlerMap = {
 
     switch (payload.chain) {
       case 'evm': {
-        const source = new RpcFeeSource(TESTNET_ENDPOINTS.evm);
+        const source = new RpcFeeSource();
         const fees = await estimateTransferFee(source, address, payload.to, amount);
         return {
           chain: 'evm',
@@ -221,6 +238,14 @@ const handlers: HandlerMap = {
         // A locked vault is an expected state the UI branches on, so surface it
         // as VAULT_LOCKED rather than letting the router flatten it to INTERNAL.
         throw new ProtocolError('VAULT_LOCKED', 'Unlock the wallet to send funds.');
+      }
+      // Surface the chain/node rejection to the popup so a failed broadcast
+      // tells the truth ("insufficient funds", "nonce too low") instead of the
+      // opaque INTERNAL fallback. Display-safe by construction: node messages
+      // carry no key material and we cap the length.
+      if (cause instanceof Error && cause.message.length > 0) {
+        const safe = cause.message.replace(/0x[0-9a-fA-F]{6,}/g, '0x…').slice(0, 240);
+        throw new ProtocolError('TX_REJECTED', `The network rejected the transaction: ${safe}`);
       }
       throw cause;
     }
@@ -462,7 +487,7 @@ const handlers: HandlerMap = {
     // the private key never outlives the call.
     return vault.withAccount('evm', accountIndex, async (account) => {
       const service = createChainService('evm');
-      const source = new RpcFeeSource(TESTNET_ENDPOINTS.evm);
+      const source = new RpcFeeSource();
 
       const value = payload.tx.value === undefined ? 0n : normalizeWei(payload.tx.value);
       const data = payload.tx.data === undefined ? undefined : hexToBytesStrict(payload.tx.data);
@@ -1143,6 +1168,25 @@ const handlers: HandlerMap = {
       return { signature, publicKey: account.address };
     });
   },
+
+  /**
+   * Testnet faucet — requests free testnet funds for a chain address.
+   *
+   * Solana and Stellar are automatable from the SW (RPC requestAirdrop and
+   * Friendbot). EVM needs a human + CAPTCHA (Sepolia public faucets), so the
+   * handler returns faucet URLs the UI can open. No key material leaves the SW;
+   * the address alone is enough.
+   */
+  'faucet.request': async (payload) => {
+    const result = await requestTestnetFaucet(payload.chain, payload.address);
+    if (!result.ok) {
+      // EVM faucets cannot be automated; surface the honest in-app error.
+      throw new ProtocolError('BAD_REQUEST', result.error);
+    }
+    const response: { ok: true; txHash?: string } = { ok: true };
+    if ('txHash' in result && result.txHash !== undefined) response.txHash = result.txHash;
+    return response;
+  },
 };
 
 /** Parses a validated decimal string into a bigint. Caller has checked the shape. */
@@ -1255,7 +1299,7 @@ async function buildAndBroadcast(
     case 'evm': {
       return vault.withAccount('evm', payload.index, async (account) => {
         const service = createChainService('evm');
-        const source = new RpcFeeSource(TESTNET_ENDPOINTS.evm);
+        const source = new RpcFeeSource();
 
         const [nonce, fees] = await Promise.all([
           service.getSequence(account.address),
@@ -1319,6 +1363,18 @@ async function buildAndBroadcast(
     case 'stellar': {
       return vault.withAccount('stellar', payload.index, async (account) => {
         const service = createChainService('stellar');
+
+        // A Stellar account must exist on-chain before it can send: if it was
+        // never funded, Horizon returns 404 and build/sign/submit with a "fresh
+        // account" sequence 0 gets rejected with HTTP 400. Catch that early and
+        // tell the user the actionable step instead.
+        if (typeof service.isFunded === 'function' && !(await service.isFunded(account.address))) {
+          throw new ProtocolError(
+            'BAD_REQUEST',
+            'This Stellar address has not been funded on testnet yet. Use "Get testnet funds" first.',
+          );
+        }
+
         const sequence = await service.getSequence(account.address);
 
         const unsigned: UnsignedStellarPayment = {

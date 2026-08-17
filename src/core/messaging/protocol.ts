@@ -35,6 +35,7 @@ export const RequestKind = z.enum([
   'zk.capability',
   'accounts.list',
   'account.balance',
+  'indexer.history',
   'tx.estimate',
   'tx.transfer',
   'vault.create',
@@ -71,6 +72,7 @@ export const RequestKind = z.enum([
   'solana.connect',
   'solana.signTransaction',
   'solana.signMessage',
+  'faucet.request',
 ]);
 export type RequestKind = z.infer<typeof RequestKind>;
 
@@ -179,6 +181,20 @@ export const AccountsListRequest = baseEnvelope.extend({
 export const AccountBalanceRequest = baseEnvelope.extend({
   kind: z.literal('account.balance'),
   payload: z.object({ chain: ChainId, address: z.string().min(1) }),
+});
+
+/**
+ * Transaction history from the Veilpay indexer. Runs in the service worker
+ * (which holds host permissions, so extension pages never hit CORS on the
+ * backend) and crosses the bus to the UI.
+ */
+export const IndexerHistoryRequest = baseEnvelope.extend({
+  kind: z.literal('indexer.history'),
+  payload: z.object({
+    chain: ChainId,
+    address: z.string().min(1),
+    limit: z.number().int().positive().max(100).default(20),
+  }),
 });
 
 /**
@@ -545,6 +561,16 @@ export const SolanaSignMessageRequest = baseEnvelope.extend({
   }),
 });
 
+/** Requests testnet funds for a chain address (faucet, from the SW). */
+export const FaucetRequest = baseEnvelope.extend({
+  kind: z.literal('faucet.request'),
+  payload: z.object({
+    chain: ChainId,
+    /** Chain-specific address is enough; the faucet does not need the key. */
+    address: z.string().min(1),
+  }),
+});
+
 export const Request = z.discriminatedUnion('kind', [
   PingRequest,
   VaultStatusRequest,
@@ -552,6 +578,7 @@ export const Request = z.discriminatedUnion('kind', [
   ZkCapabilityRequest,
   AccountsListRequest,
   AccountBalanceRequest,
+  IndexerHistoryRequest,
   TxEstimateRequest,
   TxTransferRequest,
   VaultCreateRequest,
@@ -588,6 +615,7 @@ export const Request = z.discriminatedUnion('kind', [
   SolanaConnectRequest,
   SolanaSignTransactionRequest,
   SolanaSignMessageRequest,
+  FaucetRequest,
 ]);
 export type Request = z.infer<typeof Request>;
 
@@ -665,6 +693,9 @@ export const ResponseErr = z.object({
       // The origin has triggered too many approval prompts in a rolling minute.
       // Consent-fatigue defense (spec §9).
       'PROMPT_RATE_LIMITED',
+      // The chain/node rejected a broadcast (e.g. insufficient funds).
+      // Message carries the display-safe node reason.
+      'TX_REJECTED',
     ]),
     /** Safe for display. Never contains key material or stack traces. */
     message: z.string(),
@@ -688,6 +719,22 @@ export interface ResponseData {
   }>;
   /** `balance` is a decimal string: `bigint` cannot cross the message bus. */
   'account.balance': { chain: ChainId; address: string; balance: string };
+  /** Indexer transaction history. `source` distinguishes live vs cached. */
+  'indexer.history': {
+    transactions: Array<{
+      hash: string;
+      chain: ChainId;
+      block: number;
+      timestamp: string;
+      from: string;
+      to: string;
+      amount: string;
+      fee: string;
+      status: 'confirmed' | 'pending' | 'failed';
+    }>;
+    nextCursor: string | null;
+    source: 'remote' | 'cache';
+  };
   /** Fee preview for a transfer, in base units (wei). Nothing is broadcast. */
   'tx.estimate': {
     chain: ChainId;
@@ -791,6 +838,7 @@ export interface ResponseData {
   'solana.signTransaction': { signature: string; signedTransaction: string };
   /** Signed message. */
   'solana.signMessage': { signature: string; publicKey: string };
+  'faucet.request': { ok: boolean; txHash?: string };
 }
 
 export function newId(): string {

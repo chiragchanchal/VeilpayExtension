@@ -87,29 +87,46 @@ describe('Stellar transfer serialization', () => {
 
     const raw = Uint8Array.from(atob(result.raw), (c) => c.charCodeAt(0));
 
-    // Starts with source AccountID: PUBLIC_KEY_TYPE_ED25519 (uint32 0) + 32 bytes.
-    expect(raw.slice(0, 4)).toEqual(new Uint8Array(4));
-    for (let i = 4; i < 36; i += 1) {
+    // The envelope opens with the union discriminant ENVELOPE_TYPE_TX = 2
+    // (Horizon cannot decode a bare TransactionV1Envelope body).
+    expect(raw.slice(0, 4)).toEqual(new Uint8Array([0, 0, 0, 2]));
+
+    // Then Transaction.sourceAccount (MuxedAccount, KEY_TYPE_ED25519 = 0:
+    // uint32 discriminant + 32 bytes).
+    expect(raw.slice(4, 8)).toEqual(new Uint8Array(4));
+    for (let i = 8; i < 40; i += 1) {
       expect(raw[i]).toBe(0x0a);
     }
 
-    // Contains the dest public key (0x0b) somewhere in the envelope.
+    // fee uint32 = 100 follows the source account.
+    expect(raw.slice(40, 44)).toEqual(new Uint8Array([0, 0, 0, 100]));
+
+    // seqNum int64 = 120 follows the fee (big-endian; last byte is 120).
+    expect(raw.slice(44, 52)).toEqual(new Uint8Array([0, 0, 0, 0, 0, 0, 0, 120]));
+
+    // Modern Preconditions union: PRECOND_NONE = uint32 0 (4 bytes).
+    expect(raw.slice(52, 56)).toEqual(new Uint8Array(4));
+
+    // Memo: MEMO_NONE = uint32 0.
+    expect(raw.slice(56, 60)).toEqual(new Uint8Array(4));
+
+    // Operations array: count (1), then Operation begins with a null
+    // MuxedAccount* pointer — an XDR optional pointer is FOUR bytes (0), not
+    // one — then the PAYMENT discriminant (=1).
+    expect(raw.slice(60, 64)).toEqual(new Uint8Array([0, 0, 0, 1])); // ops count = 1
+    expect(raw.slice(64, 68)).toEqual(new Uint8Array(4)); // sourceAccount* = null
+    expect(raw.slice(68, 72)).toEqual(new Uint8Array([0, 0, 0, 1])); // PAYMENT
+
+    // Destination AccountID: ED25519 discriminant (4 zero bytes) then 32 bytes
+    // of 0x0b. indexOf finds the first byte of the contiguous key run.
     const destPos = raw.indexOf(0x0b);
     expect(destPos).toBeGreaterThan(0);
-    // The 32 bytes of dest key should be contiguous.
+    expect(raw.slice(destPos - 4, destPos)).toEqual(new Uint8Array(4));
     expect(raw.slice(destPos, destPos + 32)).toEqual(new Uint8Array(32).fill(0x0b));
 
-    // Fee uint32 = 100 appears somewhere in the first 60 bytes (after source).
-    expect(raw.slice(36, 40)).toEqual(new Uint8Array([0, 0, 0, 100]));
-
-    // seqNum uint64 = 120 appears after the fee.
-    expect(raw[47]).toBe(120);
-
-    // Contains a 64-byte signature (ed25519).
+    // Ends with a 64-byte ed25519 signature.
     const sigStart = raw.length - 64;
     expect(sigStart).toBeGreaterThan(100);
-
-    // The envelope ends with the signature.
     expect(raw.length).toBe(sigStart + 64);
   });
 

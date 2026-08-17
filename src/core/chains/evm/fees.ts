@@ -2,6 +2,19 @@ import { bytesToHex } from '@noble/hashes/utils';
 import { EVM_CHAIN_ID } from './transaction';
 
 /**
+ * Ordered Sepolia EVM endpoints for fee estimation.
+ *
+ * A single public node is a single point of failure: rate limits and transient
+ * 5xx are routine on free RPCs. The fee source tries them in order and falls
+ * back rather than surfacing the first failure as "cannot send".
+ */
+export const SEPOLIA_FEE_ENDPOINTS: string[] = [
+  'https://ethereum-sepolia-rpc.publicnode.com',
+  'https://sepolia.gateway.tenderly.co',
+  'https://1rpc.io/sepolia',
+];
+
+/**
  * EVM fee and gas estimation over JSON-RPC.
  *
  * EIP-1559 separates the fee a transaction pays into two parts:
@@ -41,9 +54,14 @@ export interface EvmFeeSource {
   estimateGas(from: string, to: string, valueWei: bigint, data?: Uint8Array): Promise<bigint>;
 }
 
-/** JSON-RPC-backed fee source. Errors are thrown up to the caller. */
+/** JSON-RPC-backed fee source with endpoint fallback + tolerant parsing. */
 export class RpcFeeSource implements EvmFeeSource {
-  constructor(private rpcUrl: string) {}
+  private endpointIndex = 0;
+
+  constructor(
+    private endpoints: string[] = SEPOLIA_FEE_ENDPOINTS,
+    private timeoutMs = 10_000,
+  ) {}
 
   async maxPriorityFeePerGas(): Promise<bigint> {
     const raw = await this.call('eth_maxPriorityFeePerGas', []);
@@ -67,33 +85,65 @@ export class RpcFeeSource implements EvmFeeSource {
     return BigInt(assertHex(raw));
   }
 
+  /**
+   * Calls the method across endpoints in order. Tolerates public RPC quirks:
+   *  - some nodes omit the `jsonrpc` field on success;
+   *  - RPC `error` objects are surfaced with their message, not masked as
+   *    "invalid JSON-RPC";
+   *  - a whole endpoint failing (HTTP, timeout, shape) rotates to the next.
+   */
   private async call(method: string, params: unknown[]): Promise<unknown> {
-    const response = await fetch(this.rpcUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
-    });
-    if (!response.ok) {
-      throw new Error(`EVM RPC ${method} failed: HTTP ${response.status}`);
+    let lastError: Error | null = null;
+    for (let i = 0; i < this.endpoints.length && this.endpoints.length > 0; i += 1) {
+      const idx = (this.endpointIndex + i) % this.endpoints.length;
+      const url = this.endpoints[idx];
+      if (url === undefined || url.length === 0) continue;
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+        let response: Response;
+        try {
+          response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+            signal: controller.signal,
+          });
+        } finally {
+          clearTimeout(timer);
+        }
+
+        if (!response.ok) {
+          throw new Error(`EVM RPC ${method} failed: HTTP ${response.status}`);
+        }
+        const data = (await response.json()) as unknown;
+        if (typeof data !== 'object' || data === null) {
+          throw new Error(`EVM RPC ${method} returned a non-object response.`);
+        }
+
+        // Surface RPC errors with their real message (a response with `error`
+        // has no `result` and is still valid JSON-RPC).
+        const error = (data as { error?: unknown }).error;
+        if (error !== undefined && error !== null) {
+          const message =
+            typeof error === 'object' && error !== null && 'message' in error
+              ? String((error as { message: unknown }).message)
+              : JSON.stringify(error);
+          throw new Error(`EVM RPC ${method} error: ${message}`);
+        }
+
+        // Tolerant: require `result`, but NOT `jsonrpc` (many public nodes omit it).
+        if (!('result' in data)) {
+          throw new Error(`EVM RPC ${method} returned no result.`);
+        }
+        this.endpointIndex = idx;
+        return (data as { result: unknown }).result;
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+        // Try the next endpoint.
+      }
     }
-    const data = (await response.json()) as unknown;
-    if (
-      typeof data !== 'object' ||
-      data === null ||
-      !('result' in data) ||
-      !('jsonrpc' in data)
-    ) {
-      throw new Error(`EVM RPC ${method} returned invalid JSON-RPC.`);
-    }
-    const { error, result } = data as { error?: unknown; result: unknown };
-    if (error !== undefined && error !== null) {
-      const message =
-        typeof error === 'object' && error !== null && 'message' in error
-          ? String((error as { message: unknown }).message)
-          : JSON.stringify(error);
-      throw new Error(`EVM RPC ${method} error: ${message}`);
-    }
-    return result;
+    throw lastError ?? new Error(`EVM RPC ${method} failed on all endpoints.`);
   }
 }
 
