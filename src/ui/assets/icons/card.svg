@@ -1,0 +1,21 @@
+<svg viewBox="0 0 128 128" width="128" height="128" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="vpCardGold" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFE785"/>
+      <stop offset="35%" stop-color="#F5B82E"/>
+      <stop offset="70%" stop-color="#B86A08"/>
+      <stop offset="100%" stop-color="#5C2D00"/>
+    </linearGradient>
+  </defs>
+  <!-- Card Base -->
+  <rect x="14" y="30" width="100" height="68" rx="12" fill="url(#vpCardGold)"/>
+  <!-- EMV Chip -->
+  <rect x="28" y="50" width="22" height="18" rx="4" fill="#FFF0A3" stroke="#9E5805" stroke-width="1.5"/>
+  <line x1="28" y1="59" x2="50" y2="59" stroke="#9E5805" stroke-width="1.5"/>
+  <line x1="39" y1="50" x2="39" y2="68" stroke="#9E5805" stroke-width="1.5"/>
+  <!-- Contactless Waves -->
+  <path d="M 90 48 C 93 52 93 58 90 62" fill="none" stroke="#FFF0A3" stroke-width="2.5" stroke-linecap="round"/>
+  <path d="M 96 44 C 101 50 101 60 96 66" fill="none" stroke="#FFF0A3" stroke-width="2.5" stroke-linecap="round"/>
+  <!-- Balance Accent Pill -->
+  <rect x="28" y="80" width="36" height="6" rx="3" fill="#120B02" opacity="0.3"/>
+</svg>

@@ -2,8 +2,15 @@ import { dispatch, ProtocolError, type HandlerMap } from '@/core/messaging/route
 import * as vault from '@/core/vault';
 import { readMeta, writeMeta } from '@/core/vault/storage';
 import { createChainService, TESTNET_ENDPOINTS } from '@/core/chains';
+import { decimalAmountToBaseUnits } from '@/core/chains/amounts';
 import { fetchTransactionHistoryCached } from '@/core/chains/indexer-service';
-import { ZkCapability, type ChainId } from '@/core/messaging/protocol';
+import {
+  ZkCapability,
+  type ChainId,
+  type StellarAssetInput,
+  type TokenInputType,
+} from '@/core/messaging/protocol';
+import { resolveRpcUrl } from '@/core/networks';
 import { RpcFeeSource, estimateTransferFee } from '@/core/chains/evm/fees';
 import {
   EVM_CHAIN_ID,
@@ -12,12 +19,16 @@ import {
   type UnsignedEvmTransaction,
 } from '@/core/chains/evm/transaction';
 import {
+  deriveAssociatedTokenAddress,
   parseSolanaTransaction,
   signSolanaMessage,
+  signSolanaSplTransfer,
   signSolanaTransfer,
   signSolanaTransaction,
+  type UnsignedSolanaSplTransfer,
   type UnsignedSolanaTransfer,
 } from '@/core/chains/solana/transaction';
+import { erc20TransferCalldata } from '@/core/chains/evm/erc20';
 import { signStellarPayment, type UnsignedStellarPayment } from '@/core/chains/stellar/transaction';
 import { base58 } from '@scure/base';
 import { bytesToHex } from '@noble/hashes/utils';
@@ -81,6 +92,14 @@ import {
   GrantVaultLockedApprovalError,
 } from '@/background/grant-approval';
 import { allowPrompt } from '@/background/prompt-limiter';
+import {
+  getWalletConnectClient,
+  getPendingWcProposal,
+  getPendingWcRequest,
+  clearPendingWcRequest,
+  initWalletConnect,
+} from '@/background/walletconnect';
+import { openApprovalSurface } from '@/background/approval-surface';
 
 /**
  * Background service worker — the only context that ever holds key material.
@@ -168,15 +187,10 @@ const handlers: HandlerMap = {
    * Fee preview for a transfer. Nothing is broadcast; the UI shows this before
    * asking the user to confirm.
    *
-   * EVM estimates from live RPC; Solana and Stellar return fixed fees (the
-   * networks use deterministic base fees for simple transfers).
+   * EVM estimates gas + EIP-1559 fees from live RPC. Solana and Stellar use
+   * their current base fees (Stellar reads `fee_stats` live).
    */
   'tx.estimate': async (payload) => {
-    const amount = toWei(payload.amountNative, 'tx.estimate');
-    if (amount <= 0n) {
-      throw new ProtocolError('BAD_REQUEST', 'Amount must be greater than zero.');
-    }
-
     let address: string;
     try {
       address = (await vault.getAccountAddress(payload.chain, payload.index)).address;
@@ -187,31 +201,73 @@ const handlers: HandlerMap = {
       throw cause;
     }
 
+    const descriptor = normalizeToken(payload.token, payload.asset);
+    const token = await resolveToken(payload.chain, descriptor, address);
+
+    const amount = parseTransferAmount(payload.amount, payload.chain, 'tx.estimate', token.decimals);
+    if (amount <= 0n) {
+      throw new ProtocolError('BAD_REQUEST', 'Amount must be greater than zero.');
+    }
+
     switch (payload.chain) {
       case 'evm': {
+        const isErc20 = descriptor.kind === 'erc20';
+        const data = isErc20 && typeof descriptor.address === 'string'
+          ? erc20TransferCalldata(payload.to, amount)
+          : undefined;
         const source = new RpcFeeSource();
-        const fees = await estimateTransferFee(source, address, payload.to, amount);
+        const fees = await estimateTransferFee(source, address, isErc20 ? descriptor.address : payload.to, amount, data);
         return {
           chain: 'evm',
           from: address,
           feeNative: fees.totalFeeWei.toString(),
           gasLimit: fees.gasLimit.toString(),
+          decimals: token.decimals,
+          spendableBalance: token.spendable.toString(),
+          symbol: token.symbol,
         };
       }
-      case 'solana':
+      case 'solana': {
+        const service = createChainService(
+          'solana',
+          await resolveRpcUrl('solana', TESTNET_ENDPOINTS.solana),
+        );
+        const fee = await service.estimateGas({});
         return {
           chain: 'solana',
           from: address,
-          feeNative: '5000', // fixed 5000 lamports
+          feeNative: fee.toString(), // current lamports fee
           gasLimit: '1',
+          decimals: token.decimals,
+          spendableBalance: token.spendable.toString(),
+          symbol: token.symbol,
         };
-      case 'stellar':
-        return {
+      }
+      case 'stellar': {
+        const baseFee = await fetchStellarBaseFee();
+        const base: {
+          chain: 'stellar';
+          from: string;
+          feeNative: string;
+          gasLimit: string;
+          assetCode?: string;
+          decimals: number;
+          spendableBalance: string;
+          symbol: string;
+        } = {
           chain: 'stellar',
           from: address,
-          feeNative: '100', // fixed 100 stroops
+          feeNative: baseFee.toString(), // live base fee in stroops
           gasLimit: '1',
+          decimals: token.decimals,
+          spendableBalance: token.spendable.toString(),
+          symbol: token.symbol,
         };
+        if (descriptor.kind === 'stellar-issued') {
+          base.assetCode = descriptor.code;
+        }
+        return base;
+      }
       default:
         throw new ProtocolError('BAD_REQUEST', 'Unsupported chain.');
     }
@@ -226,13 +282,36 @@ const handlers: HandlerMap = {
    * sender is cross-checked against the signing key's address before broadcast.
    */
   'tx.transfer': async (payload) => {
-    const amount = toWei(payload.amountNative, 'tx.transfer');
+    let address: string;
+    try {
+      address = (await vault.getAccountAddress(payload.chain, payload.index)).address;
+    } catch (cause) {
+      if (cause instanceof vault.VaultLocked) {
+        throw new ProtocolError('VAULT_LOCKED', 'Unlock the wallet to send funds.');
+      }
+      throw cause;
+    }
+
+    // Resolve the token's precision and the sender's spendable balance, convert
+    // the human-readable amount to base units, and validate the balance before
+    // signing so a low balance surfaces as a clear INSUFFICIENT_BALANCE instead
+    // of an opaque node rejection.
+    const descriptor = normalizeToken(payload.token, payload.asset);
+    const token = await resolveToken(payload.chain, descriptor, address);
+    const amount = parseTransferAmount(payload.amount, payload.chain, 'tx.transfer', token.decimals);
     if (amount <= 0n) {
       throw new ProtocolError('BAD_REQUEST', 'Amount must be greater than zero.');
     }
 
     try {
-      return await buildAndBroadcast(payload, amount);
+      const result = await buildAndBroadcast(
+        payload,
+        amount,
+        descriptor,
+        token.decimals,
+        token.spendable,
+      );
+      return { ...result, decimals: token.decimals };
     } catch (cause) {
       if (cause instanceof vault.VaultLocked) {
         // A locked vault is an expected state the UI branches on, so surface it
@@ -242,9 +321,26 @@ const handlers: HandlerMap = {
       // Surface the chain/node rejection to the popup so a failed broadcast
       // tells the truth ("insufficient funds", "nonce too low") instead of the
       // opaque INTERNAL fallback. Display-safe by construction: node messages
-      // carry no key material and we cap the length.
+      // carry no key material.
+      //
+      // For Stellar the rejection carries an `extras.result_codes` object
+      // (e.g. {"transaction":"tx_bad_seq","operations":["op_underfunded"]});
+      // that is THE diagnostic, so pull it out and keep it verbatim instead of
+      // truncating it away with the verbose Horizon preamble.
+      if (cause instanceof ProtocolError) {
+        throw cause;
+      }
       if (cause instanceof Error && cause.message.length > 0) {
-        const safe = cause.message.replace(/0x[0-9a-fA-F]{6,}/g, '0x…').slice(0, 240);
+        const noHex = cause.message.replace(/0x[0-9a-fA-F]{6,}/g, '0x…');
+        const codesMatch = noHex.match(/"transaction":"[\w]+"|"operations":\[[^\]]*\]/g);
+        if (cause.message.includes('result_codes') && codesMatch !== null) {
+          const codes = codesMatch.join(', ');
+          const detailMatch = cause.message.match(/— ([^—]+) — result_codes/s);
+          const detail = detailMatch ? detailMatch[1]!.trim() : '';
+          const suffix = [detail, `result_codes: ${codes}`].filter(Boolean).join(' — ');
+          throw new ProtocolError('TX_REJECTED', `The network rejected the transaction: ${suffix}`);
+        }
+        const safe = noHex.slice(0, 240);
         throw new ProtocolError('TX_REJECTED', `The network rejected the transaction: ${safe}`);
       }
       throw cause;
@@ -1180,22 +1276,405 @@ const handlers: HandlerMap = {
   'faucet.request': async (payload) => {
     const result = await requestTestnetFaucet(payload.chain, payload.address);
     if (!result.ok) {
-      // EVM faucets cannot be automated; surface the honest in-app error.
       throw new ProtocolError('BAD_REQUEST', result.error);
     }
-    const response: { ok: true; txHash?: string } = { ok: true };
+    const response: { ok: true; txHash?: string; faucetUrl?: string } = { ok: true };
     if ('txHash' in result && result.txHash !== undefined) response.txHash = result.txHash;
+    // EVM/Solana fallbacks return an external faucet URL; the UI opens it in a
+    // new tab where the user completes any CAPTCHA to receive funds.
+    if ('faucetUrl' in result && result.faucetUrl !== undefined) {
+      response.faucetUrl = result.faucetUrl;
+    }
     return response;
+  },
+
+  'wc.pair': async (payload) => {
+    const client = await getWalletConnectClient();
+    await client.pair(payload.uri);
+    return { ok: true };
+  },
+
+  'wc.proposal.pending': async () => {
+    const proposal = await getPendingWcProposal();
+    if (!proposal) return null;
+    // Map WalletConnect's namespace types to the simpler protocol shape.
+    const mapNamespace = (
+      ns: { chains?: string[]; methods: string[]; events: string[] }
+    ): { chains: string[]; methods: string[]; events: string[] } => ({
+      chains: ns.chains ?? [],
+      methods: ns.methods,
+      events: ns.events,
+    });
+    const requiredNamespaces: Record<string, { chains: string[]; methods: string[]; events: string[] }> = {};
+    for (const [key, value] of Object.entries(proposal.requiredNamespaces)) {
+      requiredNamespaces[key] = mapNamespace(value);
+    }
+    let optionalNamespaces: Record<string, { chains: string[]; methods: string[]; events: string[] }> | undefined;
+    if (proposal.optionalNamespaces) {
+      optionalNamespaces = {};
+      for (const [key, value] of Object.entries(proposal.optionalNamespaces)) {
+        optionalNamespaces[key] = mapNamespace(value);
+      }
+    }
+    const result: {
+      id: number;
+      name: string;
+      url: string;
+      requiredNamespaces: Record<string, { chains: string[]; methods: string[]; events: string[] }>;
+      optionalNamespaces?: Record<string, { chains: string[]; methods: string[]; events: string[] }>;
+      expiry: number;
+      createdAt: number;
+    } = {
+      id: proposal.id,
+      name: proposal.proposer?.metadata?.name ?? 'Unknown dapp',
+      url: proposal.proposer?.metadata?.url ?? '',
+      requiredNamespaces,
+      expiry: proposal.expiryTimestamp,
+      createdAt: Date.now(),
+    };
+    if (optionalNamespaces !== undefined) {
+      result.optionalNamespaces = optionalNamespaces;
+    }
+    return result;
+  },
+
+  'wc.proposal.approve': async (payload) => {
+    const client = await getWalletConnectClient();
+    await client.approveProposal(payload.proposalId, payload.accounts);
+    return { ok: true };
+  },
+
+  'wc.proposal.reject': async (payload) => {
+    const client = await getWalletConnectClient();
+    await client.rejectProposal(payload.proposalId);
+    return { ok: true };
+  },
+
+  'wc.session.list': async () => {
+    const client = await getWalletConnectClient();
+    const sessions = client.getSessions();
+    return sessions.map((s) => {
+      const accounts = Object.values(s.namespaces ?? {}).flatMap((ns) => ns?.accounts ?? []);
+      return {
+        topic: s.topic,
+        name: s.peer?.metadata?.name ?? 'WalletConnect dapp',
+        url: s.peer?.metadata?.url ?? '',
+        accounts,
+        createdAt: Date.now(),
+        expiry: new Date(s.expiry * 1000).toISOString(),
+      };
+    });
+  },
+
+  'wc.session.disconnect': async (payload) => {
+    const client = await getWalletConnectClient();
+    await client.disconnect(payload.topic);
+    return { ok: true };
+  },
+
+  'wc.request.pending': async () => {
+    const req = await getPendingWcRequest();
+    if (!req) return null;
+    return {
+      topic: req.topic,
+      requestId: req.requestId,
+      chainId: req.chainId,
+      method: req.request?.method ?? 'unknown',
+      hint: requestHint(req.request?.method, req.request?.params),
+      createdAt: req.createdAt,
+    };
+  },
+
+  'wc.request.resolve': async (payload) => {
+    const req = await getPendingWcRequest();
+    if (!req) return { ok: false };
+    const client = await getWalletConnectClient();
+    if (payload.action === 'deny') {
+      await client.respondError(req.topic, req.requestId, {
+        code: 4001,
+        message: 'User rejected the request.',
+      });
+      await clearPendingWcRequest();
+      return { ok: true };
+    }
+    // Approve: delegate to the same signing/broadcasting path used by the
+    // in-page EIP-1193 provider. This keeps key handling in the background and
+    // reuses the existing approval UX.
+    await resolveWcRequest(req);
+    await clearPendingWcRequest();
+    return { ok: true };
   },
 };
 
-/** Parses a validated decimal string into a bigint. Caller has checked the shape. */
-function toWei(decimal: string, kind: string): bigint {
-  try {
-    return BigInt(decimal);
-  } catch {
-    throw new ProtocolError('BAD_REQUEST', `Invalid amount for ${kind}.`);
+/** Decimal places used to convert human-readable token amounts to base units. */
+const CHAIN_DECIMALS: Record<ChainId, number> = {
+  evm: 18, // wei
+  solana: 9, // lamports
+  stellar: 7, // stroops (all Stellar assets use 7 decimals by convention)
+};
+
+/** Human-readable summary of a WalletConnect RPC request for the user. */
+function requestHint(method: string | undefined, params: any[] | undefined): string {
+  if (method === 'eth_sendTransaction' || method === 'eth_signTransaction') {
+    const tx =
+      Array.isArray(params) && params[0] && typeof params[0] === 'object'
+        ? (params[0] as Record<string, unknown>)
+        : undefined;
+    const to = typeof tx?.to === 'string' ? tx.to.slice(0, 10) + '…' + tx.to.slice(-4) : 'unknown';
+    return `Send transaction to ${to}`;
   }
+  if (method === 'personal_sign') {
+    const bytes = params && params[0];
+    const size =
+      typeof bytes === 'string'
+        ? (bytes.startsWith('0x') ? bytes.length - 2 : bytes.length) / 2
+        : 0;
+    return `Sign a ${Math.round(size)}-byte message`;
+  }
+  if (method === 'eth_signTypedData' || method === 'eth_signTypedData_v4') {
+    return 'Sign structured (typed) data';
+  }
+  return `Sign request (${method ?? 'unknown'})`;
+}
+
+/**
+ * Fulfills an approved WalletConnect session request by delegating to the same
+ * EVM signing/broadcasting path the in-page provider uses. Key handling stays
+ * in the background inside `vault.withAccount`; only the signature or tx hash
+ * is returned to WalletConnect.
+ */
+async function resolveWcRequest(req: {
+  topic: string;
+  requestId: number;
+  chainId: string;
+  request: { method: string; params: any[] };
+}): Promise<void> {
+  const client = await getWalletConnectClient();
+
+  switch (req.request.method) {
+    case 'eth_sendTransaction': {
+      const tx =
+        Array.isArray(req.request.params) && req.request.params[0]
+          ? (req.request.params[0] as Record<string, unknown>)
+          : null;
+      if (!tx || typeof tx.from !== 'string') {
+        throw new ProtocolError('BAD_REQUEST', 'WalletConnect transaction is missing a sender.');
+      }
+      const accountIndex = await findEvmAccountIndex(tx.from);
+      if (accountIndex === null) {
+        throw new ProtocolError('ORIGIN_DENIED', 'Sender is not a wallet account.');
+      }
+      const value = typeof tx.value === 'string' && tx.value.length > 0 ? normalizeWei(tx.value) : 0n;
+      const to =
+        typeof tx.to === 'string' && tx.to.length > 0 ? tx.to : undefined;
+      const data =
+        typeof tx.data === 'string' && tx.data.length > 0 ? hexToBytesStrict(tx.data) : undefined;
+
+      const hash = await vault.withAccount('evm', accountIndex, async (account) => {
+        const service = createChainService('evm');
+        const source = new RpcFeeSource();
+        const target = to ?? account.address;
+        const [nonce, fees] = await Promise.all([
+          service.getSequence(account.address),
+          estimateTransferFee(source, account.address, target, value, data),
+        ]);
+        const unsigned: UnsignedEvmTransaction = {
+          chainId: EVM_CHAIN_ID,
+          nonce,
+          maxPriorityFeePerGas: fees.maxPriorityFeePerGas,
+          maxFeePerGas: fees.maxFeePerGas,
+          gasLimit: fees.gasLimit,
+          to: target,
+          value,
+        };
+        if (data !== undefined) unsigned.data = data;
+        const signed = signTransaction(unsigned, account.privateKey);
+        if (signed.from.toLowerCase() !== account.address.toLowerCase()) {
+          throw new Error('Signer address does not match the derived account.');
+        }
+        return service.sendTransaction(signed.raw);
+      });
+
+      await client.respondResult(req.topic, req.requestId, hash);
+      return;
+    }
+
+    case 'personal_sign': {
+      if (!Array.isArray(req.request.params)) {
+        throw new ProtocolError('BAD_REQUEST', 'personal_sign expects [message, address].');
+      }
+      const [message, address] = req.request.params as [string | undefined, string | undefined];
+      if (typeof message !== 'string' || typeof address !== 'string') {
+        throw new ProtocolError('BAD_REQUEST', 'personal_sign expects [message, address].');
+      }
+      const accountIndex = await findEvmAccountIndex(address);
+      if (accountIndex === null) {
+        throw new ProtocolError('ORIGIN_DENIED', 'Signing address is not a wallet account.');
+      }
+      const signature = await vault.withAccount('evm', accountIndex, async (account) => {
+        const { signature: sig } = signPersonalMessage(hexToBytesStrict(message), account.privateKey);
+        return sig;
+      });
+      await client.respondResult(req.topic, req.requestId, signature);
+      return;
+    }
+
+    // eth_signTypedData(_v4) and eth_sign are not yet wired to the approval
+    // UI. Fail cleanly rather than respond with a misleading empty signature.
+    default:
+      throw new ProtocolError(
+        'BAD_REQUEST',
+        `WalletConnect method ${req.request.method} is not supported yet.`,
+      );
+  }
+}
+
+/**
+ * Converts a human-readable decimal amount ("0.5") into base units for a token
+ * (wei / lamports / stroops). The fractional input is scaled with BigInt math,
+ * never floating point, so `0.001` cannot lose precision.
+ *
+ * `decimals` is the resolved token precision (native per-chain by default, or
+ * the token's on-chain `decimals()` / mint decimals for ERC20/SPL).
+ *
+ * The input has already passed the `NativeDecimal` protocol schema (digits with
+ * an optional fraction), so this only needs to handle well-formed decimals.
+ */
+function parseTransferAmount(
+  decimal: string,
+  chain: ChainId,
+  kind: string,
+  decimalsOverride?: number,
+): bigint {
+  const decimals = decimalsOverride ?? CHAIN_DECIMALS[chain];
+  try {
+    return decimalAmountToBaseUnits(decimal, decimals);
+  } catch {
+    // RangeError from an oversized base amount.
+    throw new ProtocolError('BAD_REQUEST', `Amount for ${kind} is too large.`);
+  }
+}
+
+/**
+ * Normalized internal descriptor for which token is being sent, after the
+ * protocol's `token`/legacy `asset` fields are reconciled.
+ */
+type TokenDescriptor =
+  | { kind: 'native' }
+  | { kind: 'stellar-issued'; code: string; issuer: string }
+  | { kind: 'erc20'; address: string }
+  | { kind: 'spl'; mint: string };
+
+/** Symbol of the native asset on each chain. */
+const NATIVE_SYMBOL: Record<ChainId, string> = {
+  evm: 'ETH',
+  solana: 'SOL',
+  stellar: 'XLM',
+};
+
+/** Reconciles the protocol's `token` (new) and `asset` (legacy Stellar) into a `TokenDescriptor`. */
+function normalizeToken(
+  token: TokenInputType | undefined,
+  asset: StellarAssetInput | undefined,
+): TokenDescriptor {
+  // Preferred: the new `token` field.
+  if (token !== undefined) {
+    switch (token.kind) {
+      case 'native':
+        return { kind: 'native' };
+      case 'stellar-issued':
+        return { kind: 'stellar-issued', code: token.code, issuer: token.issuer };
+      case 'erc20':
+        return { kind: 'erc20', address: token.address };
+      case 'spl':
+        return { kind: 'spl', mint: token.mint };
+      default:
+        throw new ProtocolError('BAD_REQUEST', 'Unsupported token kind.');
+    }
+  }
+  // Back-compat: legacy `asset` (Stellar native/issued).
+  if (asset !== undefined && asset.type === 'issued') {
+    return { kind: 'stellar-issued', code: asset.code, issuer: asset.issuer };
+  }
+  // No token/asset, or a native `asset` — native across every chain.
+  return { kind: 'native' };
+}
+
+/**
+ * Resolves a token's decimal precision and the sender's spendable balance for
+ * it, by reading on-chain metadata when a non-native token is selected.
+ * Returns the decimals (for conversion), the spendable balance in base units,
+ * and a display symbol. Throws INSUFFICIENT_BALANCE is NOT raised here; the
+ * caller compares amount+fee against `spendable`.
+ */
+async function resolveToken(
+  chain: ChainId,
+  descriptor: TokenDescriptor,
+  address: string,
+): Promise<{ decimals: number; spendable: bigint; symbol: string }> {
+  const service = createChainService(
+    chain,
+    await resolveRpcUrl(chain, TESTNET_ENDPOINTS[chain]),
+  );
+
+  // Native token: precision + balance come straight from the chain.
+  if (descriptor.kind === 'native') {
+    const decimals = CHAIN_DECIMALS[chain];
+    const spendable = await service.getBalance(address);
+    return { decimals, spendable, symbol: NATIVE_SYMBOL[chain] };
+  }
+
+  if (descriptor.kind === 'stellar-issued') {
+    // Stellar issued assets are always 7 decimals; balance read from Horizon.
+    const spendable =
+      typeof service.getAssetBalance === 'function'
+        ? await service.getAssetBalance(address, descriptor.code, descriptor.issuer)
+        : 0n;
+    return { decimals: 7, spendable, symbol: descriptor.code };
+  }
+
+  if (descriptor.kind === 'erc20') {
+    if (typeof service.erc20Decimals !== 'function' || typeof service.erc20BalanceOf !== 'function') {
+      throw new ProtocolError('BAD_REQUEST', 'EVM token support unavailable.');
+    }
+    const [decimals, balance] = await Promise.all([
+      service.erc20Decimals(descriptor.address),
+      service.erc20BalanceOf(descriptor.address, address),
+    ]);
+    return { decimals, spendable: balance, symbol: 'ERC20' };
+  }
+
+  // spl
+  if (typeof service.mintDecimals !== 'function') {
+    throw new ProtocolError('BAD_REQUEST', 'Solana token support unavailable.');
+  }
+  const [decimals, spendable] = await Promise.all([
+    service.mintDecimals(descriptor.mint),
+    service.tokenBalance ? service.tokenBalance(address, descriptor.mint) : Promise.resolve(0n),
+  ]);
+  return { decimals, spendable, symbol: 'SPL' };
+}
+
+/**
+ * Reads the current Stellar base fee (stroops) from the configured Horizon
+ * endpoint, falling back to the official testnet gateway. Uses the chain
+ * service so endpoint rotation, timeouts, and custom networks all apply.
+ */
+async function fetchStellarBaseFee(): Promise<bigint> {
+  const service = createChainService('stellar', await resolveStellarEndpoints());
+  return service.getBaseFee ? service.getBaseFee() : 100n;
+}
+
+/**
+ * Resolves the Stellar Horizon endpoints, honoring a user-configured custom
+ * network (tried first) with the official testnet gateway as automatic
+ * fallback inside `StellarService`.
+ */
+async function resolveStellarEndpoints(): Promise<string[]> {
+  const custom = await resolveRpcUrl('stellar', TESTNET_ENDPOINTS.stellar);
+  const endpoints: string[] = [];
+  if (custom.length > 0) endpoints.push(custom);
+  return endpoints;
 }
 
 /**
@@ -1292,29 +1771,75 @@ async function findSolanaAccountIndex(address: string): Promise<number | null> {
  * service worker.
  */
 async function buildAndBroadcast(
-  payload: { chain: ChainId; index: number; to: string; amountNative: string },
+  payload: {
+    chain: ChainId;
+    index: number;
+    to: string;
+    amount: string;
+    asset?: StellarAssetInput | undefined;
+  },
   amount: bigint,
+  descriptor: TokenDescriptor,
+  decimals: number,
+  spendable: bigint,
 ): Promise<{ chain: ChainId; from: string; to: string; amountNative: string; hash: string }> {
   switch (payload.chain) {
     case 'evm': {
       return vault.withAccount('evm', payload.index, async (account) => {
-        const service = createChainService('evm');
+        const service = createChainService(
+          'evm',
+          await resolveRpcUrl('evm', TESTNET_ENDPOINTS.evm),
+        );
         const source = new RpcFeeSource();
+
+        const isErc20 = descriptor.kind === 'erc20';
+        const data = isErc20 && descriptor.kind === 'erc20'
+          ? erc20TransferCalldata(payload.to, amount)
+          : undefined;
+        const feeEstimateTarget = isErc20 && descriptor.kind === 'erc20' ? descriptor.address : payload.to;
 
         const [nonce, fees] = await Promise.all([
           service.getSequence(account.address),
-          estimateTransferFee(source, account.address, payload.to, amount),
+          estimateTransferFee(source, account.address, feeEstimateTarget, amount, data),
         ]);
 
-        const unsigned: UnsignedEvmTransaction = {
-          chainId: EVM_CHAIN_ID,
-          nonce,
-          maxPriorityFeePerGas: fees.maxPriorityFeePerGas,
-          maxFeePerGas: fees.maxFeePerGas,
-          gasLimit: fees.gasLimit,
-          to: payload.to,
-          value: amount,
-        };
+        // Surfaces a low spendable balance as a clear client error BEFORE any
+        // broadcast. Native sends must cover amount + fee in wei; ERC20 token
+        // sends must cover the token amount (the wei fee is drawn from the
+        // sender's native balance separately at submit).
+        if (isErc20 ? spendable < amount : spendable < amount + fees.totalFeeWei) {
+          throw new ProtocolError(
+            'INSUFFICIENT_BALANCE',
+            isErc20
+              ? 'Insufficient token balance for this amount.'
+              : 'Insufficient balance for the amount plus network fee.',
+          );
+        }
+
+        // For a plain EVM value transfer the recipient is `to` and the value is
+        // the amount. For an ERC20 send we target the contract with the token
+        // `transfer` calldata and a zero native value.
+        const unsigned: UnsignedEvmTransaction =
+          isErc20 && descriptor.kind === 'erc20'
+            ? {
+                chainId: EVM_CHAIN_ID,
+                nonce,
+                maxPriorityFeePerGas: fees.maxPriorityFeePerGas,
+                maxFeePerGas: fees.maxFeePerGas,
+                gasLimit: fees.gasLimit,
+                to: descriptor.address,
+                value: 0n,
+                data: erc20TransferCalldata(payload.to, amount),
+              }
+            : {
+                chainId: EVM_CHAIN_ID,
+                nonce,
+                maxPriorityFeePerGas: fees.maxPriorityFeePerGas,
+                maxFeePerGas: fees.maxFeePerGas,
+                gasLimit: fees.gasLimit,
+                to: payload.to,
+                value: amount,
+              };
 
         const signed = signTransaction(unsigned, account.privateKey);
 
@@ -1328,7 +1853,7 @@ async function buildAndBroadcast(
           chain: 'evm',
           from: account.address,
           to: payload.to,
-          amountNative: payload.amountNative,
+          amountNative: amount.toString(),
           hash,
         };
       });
@@ -1336,6 +1861,57 @@ async function buildAndBroadcast(
     case 'solana': {
       return vault.withAccount('solana', payload.index, async (account) => {
         const blockhash = await fetchSolanaBlockhash();
+        const service = createChainService(
+          'solana',
+          await resolveRpcUrl('solana', TESTNET_ENDPOINTS.solana),
+        );
+
+        if (descriptor.kind === 'spl') {
+          const mint = descriptor.mint;
+          // Find the sender's funded token account, or inert-transfer directly.
+          const source =
+            typeof service.tokenAccount === 'function'
+              ? await service.tokenAccount(account.address, mint)
+              : null;
+          if (source === null) {
+            throw new ProtocolError('BAD_REQUEST', 'You have no token account for this SPL mint.');
+          }
+          // The recipient must hold or first receive the ATA; derive it for the send target.
+          const dest = deriveAssociatedTokenAddress(payload.to, mint);
+          // The spendable (token) balance is already passed in from resolveToken.
+          if (spendable < amount) {
+            throw new ProtocolError('INSUFFICIENT_BALANCE', 'Insufficient token balance.');
+          }
+          const unsigned: UnsignedSolanaSplTransfer = {
+            from: account.address,
+            source,
+            mint,
+            dest,
+            amount,
+            decimals,
+            blockhash,
+          };
+          const signed = signSolanaSplTransfer(unsigned, account.privateKey);
+          if (signed.from !== account.address) {
+            throw new Error('Signer address does not match the derived account.');
+          }
+          const hash = await service.sendTransaction(signed.raw);
+          return {
+            chain: 'solana',
+            from: account.address,
+            to: payload.to,
+            amountNative: amount.toString(),
+            hash,
+          };
+        }
+
+        // Native SOL transfer.
+        const lamportBalance = await service.getBalance(account.address);
+        const lamportFee = await service.estimateGas({});
+        if (lamportBalance < amount + lamportFee) {
+          throw new ProtocolError('INSUFFICIENT_BALANCE', 'Insufficient SOL balance for the amount plus fee.');
+        }
+
         const unsigned: UnsignedSolanaTransfer = {
           from: account.address,
           to: payload.to,
@@ -1347,42 +1923,60 @@ async function buildAndBroadcast(
         if (signed.from !== account.address) {
           throw new Error('Signer address does not match the derived account.');
         }
-
-        const service = createChainService('solana');
         const hash = await service.sendTransaction(signed.raw);
 
         return {
           chain: 'solana',
           from: account.address,
           to: payload.to,
-          amountNative: payload.amountNative,
+          amountNative: amount.toString(),
           hash,
         };
       });
     }
     case 'stellar': {
       return vault.withAccount('stellar', payload.index, async (account) => {
-        const service = createChainService('stellar');
+        const service = createChainService(
+          'stellar',
+          await resolveStellarEndpoints(),
+        );
 
-        // A Stellar account must exist on-chain before it can send: if it was
-        // never funded, Horizon returns 404 and build/sign/submit with a "fresh
-        // account" sequence 0 gets rejected with HTTP 400. Catch that early and
-        // tell the user the actionable step instead.
-        if (typeof service.isFunded === 'function' && !(await service.isFunded(account.address))) {
-          throw new ProtocolError(
-            'BAD_REQUEST',
-            'This Stellar address has not been funded on testnet yet. Use "Get testnet funds" first.',
-          );
+        // Only native-XLM sends require the sender be funded: an unfunded
+        // account cannot hold XLM to pay the base reserve. Sending an issued
+        // asset self-creates the account with the native minimum (the source
+        // must still hold 1 XLM reserve, enforced on-chain at submit).
+        const fee = Number((await service.getBaseFee?.()) ?? 100n);
+        const isStellarIssued = descriptor.kind === 'stellar-issued';
+        if (!isStellarIssued) {
+          if (typeof service.isFunded === 'function' && !(await service.isFunded(account.address))) {
+            throw new ProtocolError(
+              'BAD_REQUEST',
+              'This Stellar address has not been funded on testnet yet. Use "Get testnet funds" first.',
+            );
+          }
+          // Pre-submit spendable check so a low balance surfaces as a clear
+          // client error instead of Horizon's opaque op_underfunded. For native
+          // XLM the spendable balance (stroops) was resolved up front; the relayer
+          // still enforces the on-chain minimum at submit for issued assets.
+          if (spendable < amount + BigInt(fee)) {
+            throw new ProtocolError('INSUFFICIENT_BALANCE', 'Insufficient XLM balance for the amount plus fee.');
+          }
         }
 
         const sequence = await service.getSequence(account.address);
+
+        const asset =
+          isStellarIssued && descriptor.kind === 'stellar-issued'
+            ? { type: 'issued' as const, code: descriptor.code, issuer: descriptor.issuer }
+            : { type: 'native' as const };
 
         const unsigned: UnsignedStellarPayment = {
           from: account.address,
           to: payload.to,
           amount,
+          asset,
           sequence,
-          fee: 100,
+          fee,
         };
         const signed = signStellarPayment(unsigned, account.privateKey);
 
@@ -1396,7 +1990,7 @@ async function buildAndBroadcast(
           chain: 'stellar',
           from: account.address,
           to: payload.to,
-          amountNative: payload.amountNative,
+          amountNative: amount.toString(),
           hash,
         };
       });
@@ -1440,25 +2034,6 @@ async function fetchSolanaBlockhash(): Promise<Uint8Array> {
     throw new Error('Solana RPC getLatestBlockhash: no blockhash in response.');
   }
   return base58.decode(blockhash);
-}
-
-/**
- * Opens the popup so the user can approve or deny a dapp connection request.
- *
- * Chrome 127+ supports `chrome.action.openPopup()` (no extra permission).
- * When unavailable, the pending record is still readable from
- * `chrome.storage.session` — the user just needs to click the toolbar icon to
- * see the approval UI. Returns without throwing on failure.
- */
-async function openApprovalSurface(): Promise<void> {
-  try {
-    if (typeof chrome.action.openPopup === 'function') {
-      await chrome.action.openPopup();
-    }
-  } catch {
-    // openPopup fails if the popup is already open or the action is in a
-    // restricted context. The user clicks the toolbar icon instead.
-  }
 }
 
 const INTERNAL_CHANNEL = 'veilpay:internal';
@@ -1574,6 +2149,7 @@ function ensureIdleAlarm(): void {
 chrome.runtime.onInstalled.addListener(() => {
   ensureIdleAlarm();
   void runZkSpikeOnce();
+  void initWalletConnect();
   buildContextMenu();
 });
 
@@ -1583,6 +2159,7 @@ chrome.runtime.onStartup.addListener(() => {
   // closed early, browser quit mid-probe — the capability stays unwritten, and
   // without this the D3 question would never be measured again.
   void runZkSpikeOnce();
+  void initWalletConnect();
   buildContextMenu();
 });
 

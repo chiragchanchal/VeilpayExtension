@@ -15,6 +15,11 @@
 
   body {
     @apply bg-surface-900 font-body text-content-primary antialiased;
+    /* Soft ambient glow so large surfaces do not read as flat black. */
+    background-image:
+      radial-gradient(640px 260px at 50% -60px, rgba(245, 158, 11, 0.08), transparent 70%),
+      radial-gradient(480px 300px at 110% 110%, rgba(59, 130, 246, 0.05), transparent 70%);
+    background-attachment: fixed;
   }
 
   /* Visible focus for keyboard users, suppressed for mouse clicks.

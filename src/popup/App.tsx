@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { t } from '@/i18n';
 import { useWallet, type AccountView } from '@/ui/store/useWallet';
 import { Button } from '@/ui/components/Button';
@@ -10,7 +10,10 @@ import { ConnectionApproval } from '@/ui/components/ConnectionApproval';
 import { TransactionApproval } from '@/ui/components/TransactionApproval';
 import { X402Approval } from '@/ui/components/X402Approval';
 import { GrantApproval } from '@/ui/components/GrantApproval';
-import type { ZkCapability } from '@/core/messaging/protocol';
+import { Icon } from '@/ui/components/Icon';
+import { BrandLogo } from '@/ui/components/BrandLogo';
+import { QRCode } from '@/ui/components/QRCode';
+import type { StellarAssetInput, TokenInputType, ZkCapability } from '@/core/messaging/protocol';
 
 const AUTO_RELOAD_KEY = 'bootAutoReloadedAt';
 const AUTO_RELOAD_WINDOW_MS = 60_000;
@@ -94,7 +97,11 @@ export default function App() {
   const [view, setView] = useState<'accounts' | 'send' | 'receive' | 'import'>('accounts');
   const [sendTo, setSendTo] = useState('');
   const [sendAmount, setSendAmount] = useState('');
+  const [sendAsset, setSendAsset] = useState<StellarAssetInput | undefined>(undefined);
+  const [sendToken, setSendToken] = useState<TokenInputType | undefined>(undefined);
   const [sendFee, setSendFee] = useState<string | null>(null);
+  const [sendDecimals, setSendDecimals] = useState<number | null>(null);
+  const [sendSpendable, setSendSpendable] = useState<string | null>(null);
   const [sendStatus, setSendStatus] = useState<'fee' | 'confirm' | 'sending' | 'done'>('fee');
   const [sendHash, setSendHash] = useState<string | null>(null);
   const [receiveIdx, setReceiveIdx] = useState(0);
@@ -308,28 +315,64 @@ export default function App() {
     setSendAccount(acc);
     setSendTo('');
     setSendAmount('');
+    setSendAsset(undefined);
+    setSendToken(undefined);
     setSendFee(null);
+    setSendDecimals(null);
+    setSendSpendable(null);
     setSendStatus('fee');
     setSendHash(null);
     setView('send');
   };
 
-  const handleSendFee = async () => {
-    if (sendAccount === null || sendTo.length === 0 || sendAmount.length === 0) return;
-    try {
-      const fee = await estimateTransfer(sendAccount.chain, sendAccount.index, sendTo, sendAmount);
-      setSendFee(fee.feeNative);
-      setSendStatus('confirm');
-    } catch {
-      // error is surfaced via the store
-    }
-  };
+  // Convert a Stellar asset selection into a TokenInput (for the unified send
+  // path); native assets collapse to the generic `native` kind.
+  const tokenFromAsset = (asset: StellarAssetInput | undefined): TokenInputType | undefined =>
+    asset === undefined || asset.type === 'native'
+      ? { kind: 'native' }
+      : { kind: 'stellar-issued', code: asset.code, issuer: asset.issuer };
+
+  // The current send form computes this token object once, from the per-chain
+  // asset/token selection, so the estimate and the confirm always agree.
+  // Wrapped in useCallback so its identity stays stable across renders that do
+  // not change the estimate inputs — this prevents the debounced auto-estimate
+  // effect from re-firing in a loop after each successful estimate.
+  const handleSendFee = useCallback(
+    async (token?: TokenInputType) => {
+      if (sendAccount === null || sendTo.length === 0 || sendAmount.length === 0) return;
+      const resolvedToken = token ?? sendToken ?? tokenFromAsset(sendAsset);
+      try {
+        const fee = await estimateTransfer(
+          sendAccount.chain,
+          sendAccount.index,
+          sendTo,
+          sendAmount,
+          sendAsset,
+          resolvedToken,
+        );
+        setSendFee(fee.feeNative);
+        setSendDecimals(fee.decimals);
+        setSendSpendable(fee.spendableBalance);
+        setSendStatus('confirm');
+      } catch {
+        // error is surfaced via the store
+      }
+    },
+    [sendAccount, sendTo, sendAmount, sendAsset, sendToken, estimateTransfer],
+  );
 
   const handleSendConfirm = async () => {
     if (sendAccount === null) return;
     setSendStatus('sending');
     try {
-      const { hash } = await sendTransfer(sendAccount.chain, sendAccount.index, sendTo, sendAmount);
+      const { hash } = await sendTransfer(
+        sendAccount.chain,
+        sendAccount.index,
+        sendTo,
+        sendAmount,
+        sendAsset,
+        sendToken ?? tokenFromAsset(sendAsset),
+      );
       setSendHash(hash);
       setSendStatus('done');
     } catch {
@@ -411,7 +454,7 @@ export default function App() {
 
         <div className="flex flex-1 flex-col items-center justify-center gap-4">
           <div className="flex h-12 w-12 items-center justify-center rounded-full bg-success/20">
-            <span className="text-xl">✅</span>
+            <Icon name="check" className="h-6 w-6" />
           </div>
           <h2 className="font-display text-lg font-semibold text-content-primary">{t('onboarding.walletCreated')}</h2>
           <p className="font-body text-sm text-content-secondary text-center max-w-xs">
@@ -478,13 +521,19 @@ export default function App() {
           account={sendAccount ?? accounts[0]!}
           sendTo={sendTo}
           sendAmount={sendAmount}
+          sendAsset={sendAsset}
+          sendToken={sendToken}
           sendFee={sendFee}
+          sendDecimals={sendDecimals}
+          sendSpendable={sendSpendable}
           sendStatus={sendStatus}
           sendHash={sendHash}
           isLoading={isLoading}
           error={error}
           onToChange={setSendTo}
           onAmountChange={setSendAmount}
+          onAssetChange={setSendAsset}
+          onTokenChange={setSendToken}
           onEstimate={handleSendFee}
           onConfirm={handleSendConfirm}
           onBack={() => setView('accounts')}
@@ -554,7 +603,7 @@ export default function App() {
 
         <div className="flex flex-1 flex-col items-center justify-center gap-4">
           <div className="flex h-12 w-12 items-center justify-center rounded-full bg-surface-700">
-            <span className="text-xl">🔒</span>
+            <Icon name="lock" className="h-6 w-6" />
           </div>
           <p className="font-body text-sm text-content-secondary">{t('wallet.locked')}</p>
 
@@ -779,8 +828,8 @@ export default function App() {
       <TestnetBanner />
 
       <div className="flex flex-1 flex-col items-center justify-center gap-4">
-        <div className="flex h-16 w-16 items-center justify-center rounded-full bg-accent-500/20">
-          <span className="text-2xl">🛡</span>
+        <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-full bg-accent-500/20">
+          <BrandLogo size="lg" />
         </div>
         <h2 className="font-display text-xl font-bold text-content-primary">
           {t('onboarding.welcome')}
@@ -853,17 +902,38 @@ function ZkResult({ capability }: { capability: ZkCapability | null }) {
 }
 
 // ── Send form ───────────────────────────────────────────────────────────
+const ESTIMATE_DEBOUNCE_MS = 400;
+
+function decimalToBase(decimal: string, decimals: number): bigint {
+  const dot = decimal.indexOf('.');
+  const whole = dot === -1 ? decimal : decimal.slice(0, dot);
+  const frac = dot === -1 ? '' : decimal.slice(dot + 1);
+  const truncated = frac.slice(0, decimals).padEnd(decimals, '0');
+  const scale = 10n ** BigInt(decimals);
+  try {
+    return BigInt(whole || '0') * scale + BigInt(truncated || '0');
+  } catch {
+    return 0n;
+  }
+}
+
 function SendForm({
   account,
   sendTo,
   sendAmount,
+  sendAsset,
+  sendToken,
   sendFee,
+  sendDecimals,
+  sendSpendable,
   sendStatus,
   sendHash,
   isLoading,
   error,
   onToChange,
   onAmountChange,
+  onAssetChange,
+  onTokenChange,
   onEstimate,
   onConfirm,
   onBack,
@@ -872,18 +942,105 @@ function SendForm({
   account: AccountView;
   sendTo: string;
   sendAmount: string;
+  sendAsset: StellarAssetInput | undefined;
+  sendToken: TokenInputType | undefined;
   sendFee: string | null;
+  sendDecimals: number | null;
+  sendSpendable: string | null;
   sendStatus: 'fee' | 'confirm' | 'sending' | 'done';
   sendHash: string | null;
   isLoading: boolean;
   error: string | null;
   onToChange: (v: string) => void;
   onAmountChange: (v: string) => void;
-  onEstimate: () => void;
+  onAssetChange: (a: StellarAssetInput | undefined) => void;
+  onTokenChange: (t: TokenInputType | undefined) => void;
+  onEstimate: (token?: TokenInputType) => Promise<void>;
   onConfirm: () => void;
   onBack: () => void;
   onClearError: () => void;
 }) {
+  const isStellar = account.chain === 'stellar';
+  const nativeSymbol =
+    account.chain === 'evm' ? 'ETH' : account.chain === 'solana' ? 'SOL' : 'XLM';
+  const feeSymbol =
+    account.chain === 'evm' ? 'Gwei' : account.chain === 'solana' ? 'lamports' : 'stroops';
+
+  // Normalize the current selection into a TokenInput the estimate/confirm use.
+  // For EVM/Solana the default (sendToken undefined) is the native token.
+  // Memoized so its identity is stable, keeping the debounce effect stable too.
+  const resolvedToken: TokenInputType | undefined = useMemo<TokenInputType | undefined>(
+    () =>
+      isStellar
+        ? sendAsset === undefined || sendAsset.type === 'native'
+          ? { kind: 'native' }
+          : { kind: 'stellar-issued', code: sendAsset.code, issuer: sendAsset.issuer }
+        : sendToken ?? { kind: 'native' },
+    [isStellar, sendAsset, sendToken],
+  );
+
+  const assetLabel =
+    sendAsset?.type === 'issued'
+      ? sendAsset.code
+      : sendToken?.kind === 'erc20' || sendToken?.kind === 'spl'
+        ? 'Token'
+        : nativeSymbol;
+
+  // Auto-estimate: after the recipient/amount/token settle (debounced), run the
+  // estimate so the fee preview appears without a manual button. Any change
+  // resets the flow back to 'fee' until a fresh estimate lands.
+  const ready =
+    sendTo.length > 0 &&
+    sendAmount.length > 0 &&
+    resolvedToken !== undefined &&
+    (resolvedToken.kind !== 'stellar-issued' || (sendAsset?.type === 'issued' && sendAsset.code.length > 0 && sendAsset.issuer.length > 0)) &&
+    (resolvedToken.kind !== 'erc20' || (resolvedToken.address?.length ?? 0) > 0) &&
+    (resolvedToken.kind !== 'spl' || (resolvedToken.mint?.length ?? 0) > 0);
+
+  useEffect(() => {
+    if (!ready || sendStatus === 'sending' || sendStatus === 'done') return;
+    const id = window.setTimeout(() => {
+      void onEstimate(resolvedToken);
+    }, ESTIMATE_DEBOUNCE_MS);
+    return () => window.clearTimeout(id);
+  }, [sendTo, sendAmount, resolvedToken, ready, sendStatus, onEstimate]);
+
+  // Spendable-balance gate. For a native send, amount + fee must fit the native
+  // balance. For a token send, the amount must fit the token balance (fee is a
+  // separate native-payment concern the background enforces at submit).
+  const insufficientBalance =
+    sendDecimals !== null && sendSpendable !== null && sendFee !== null && sendAmount.length > 0
+      ? (() => {
+          const base = decimalToBase(sendAmount, sendDecimals);
+          const spendable = (() => {
+            try {
+              return BigInt(sendSpendable);
+            } catch {
+              return 0n;
+            }
+          })();
+          const isNative = sendToken === undefined || sendToken.kind === 'native';
+          const fee = isNative
+            ? (() => {
+                try {
+                  return BigInt(sendFee);
+                } catch {
+                  return 0n;
+                }
+              })()
+            : 0n;
+          return base + fee > spendable;
+        })()
+      : false;
+
+  const disableSend =
+    isLoading ||
+    sendStatus === 'sending' ||
+    sendTo.length === 0 ||
+    sendAmount.length === 0 ||
+    ready === false ||
+    insufficientBalance;
+
   if (sendStatus === 'done' && sendHash !== null) {
     return (
       <main className="flex min-h-[600px] w-[400px] flex-col gap-4 p-4">
@@ -893,7 +1050,7 @@ function SendForm({
         </header>
         <div className="flex flex-1 flex-col items-center justify-center gap-4">
           <div className="flex h-12 w-12 items-center justify-center rounded-full bg-success/20">
-            <span className="text-xl">✅</span>
+            <Icon name="check" className="h-6 w-6" />
           </div>
           <h2 className="font-display text-lg font-semibold text-content-primary">Sent!</h2>
           <p className="font-mono text-xs text-content-tertiary break-all text-center max-w-xs">
@@ -926,17 +1083,137 @@ function SendForm({
           onChange={(e) => { onToChange(e.target.value); onClearError(); }}
           disabled={isLoading || sendStatus === 'sending'}
         />
+
+        {isStellar && (
+          <div className="flex flex-col gap-1">
+            <label className="font-body text-xs text-content-secondary">Asset</label>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => { onAssetChange({ type: 'native' }); onClearError(); }}
+                className={`flex-1 rounded-lg border px-3 py-2 font-body text-xs ${
+                  sendAsset === undefined || sendAsset.type === 'native'
+                    ? 'border-accent-500 bg-accent-500/10 text-content-primary'
+                    : 'border-surface-700 text-content-secondary'
+                }`}
+                disabled={isLoading || sendStatus === 'sending'}
+              >
+                Native (XLM)
+              </button>
+              <button
+                type="button"
+                onClick={() => { onAssetChange({ type: 'issued', code: '', issuer: '' }); onClearError(); }}
+                className={`flex-1 rounded-lg border px-3 py-2 font-body text-xs ${
+                  sendAsset?.type === 'issued'
+                    ? 'border-accent-500 bg-accent-500/10 text-content-primary'
+                    : 'border-surface-700 text-content-secondary'
+                }`}
+                disabled={isLoading || sendStatus === 'sending'}
+              >
+                Testnet token
+              </button>
+            </div>
+          </div>
+        )}
+
+        {!isStellar && (
+          <div className="flex flex-col gap-1">
+            <label className="font-body text-xs text-content-secondary">Token</label>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => { onTokenChange(undefined); onClearError(); }}
+                className={`flex-1 rounded-lg border px-3 py-2 font-body text-xs ${
+                  sendToken === undefined || sendToken.kind === 'native'
+                    ? 'border-accent-500 bg-accent-500/10 text-content-primary'
+                    : 'border-surface-700 text-content-secondary'
+                }`}
+                disabled={isLoading || sendStatus === 'sending'}
+              >
+                Native ({nativeSymbol})
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  onTokenChange(account.chain === 'evm' ? { kind: 'erc20', address: '' } : { kind: 'spl', mint: '' });
+                  onClearError();
+                }}
+                className={`flex-1 rounded-lg border px-3 py-2 font-body text-xs ${
+                  sendToken?.kind === 'erc20' || sendToken?.kind === 'spl'
+                    ? 'border-accent-500 bg-accent-500/10 text-content-primary'
+                    : 'border-surface-700 text-content-secondary'
+                }`}
+                disabled={isLoading || sendStatus === 'sending'}
+              >
+                Token
+              </button>
+            </div>
+          </div>
+        )}
+
+        {!isStellar && sendToken?.kind === 'erc20' && (
+          <Input
+            label="ERC-20 contract (0x…)"
+            placeholder="0x…"
+            value={sendToken.address ?? ''}
+            onChange={(e) => { onTokenChange({ kind: 'erc20', address: e.target.value }); onClearError(); }}
+            disabled={isLoading || sendStatus === 'sending'}
+          />
+        )}
+
+        {!isStellar && sendToken?.kind === 'spl' && (
+          <Input
+            label="SPL mint"
+            placeholder="SPL token mint"
+            value={sendToken.mint ?? ''}
+            onChange={(e) => { onTokenChange({ kind: 'spl', mint: e.target.value }); onClearError(); }}
+            disabled={isLoading || sendStatus === 'sending'}
+          />
+        )}
+
+        {sendAsset?.type === 'issued' && (
+          <div className="flex flex-col gap-2">
+            <Input
+              label="Asset code"
+              placeholder="e.g. USDC"
+              value={sendAsset.code}
+              onChange={(e) => {
+                onAssetChange({ type: 'issued', code: e.target.value.toUpperCase(), issuer: sendAsset.issuer });
+                onClearError();
+              }}
+              disabled={isLoading || sendStatus === 'sending'}
+            />
+            <Input
+              label="Issuer address (G...)"
+              placeholder="G..."
+              value={sendAsset.issuer}
+              onChange={(e) => {
+                onAssetChange({ type: 'issued', code: sendAsset.code, issuer: e.target.value });
+                onClearError();
+              }}
+              disabled={isLoading || sendStatus === 'sending'}
+            />
+          </div>
+        )}
+
         <Input
-          label="Amount (base units)"
-          placeholder="Amount (base units)"
+          label={`Amount (${assetLabel})`}
+          placeholder={`0.0 ${assetLabel}`}
           value={sendAmount}
           onChange={(e) => { onAmountChange(e.target.value); onClearError(); }}
           disabled={isLoading || sendStatus === 'sending'}
+          inputMode="decimal"
         />
 
-        {sendStatus === 'confirm' && sendFee !== null && (
+        {sendFee !== null && (
           <p className="font-body text-xs text-content-secondary">
-            Estimated fee: {sendFee} base units
+            Estimated fee: {sendFee} {feeSymbol}
+          </p>
+        )}
+
+        {insufficientBalance && sendStatus === 'confirm' && (
+          <p className="font-body text-xs text-danger">
+            Insufficient balance for the amount{sendToken === undefined || sendToken.kind === 'native' ? ' plus fee' : ''}.
           </p>
         )}
 
@@ -948,21 +1225,8 @@ function SendForm({
           <Button variant="secondary" onClick={onBack} disabled={isLoading}>
             Back
           </Button>
-          {sendStatus === 'fee' && (
-            <Button
-              fullWidth
-              onClick={onEstimate}
-              disabled={isLoading || sendTo.length === 0 || sendAmount.length === 0}
-            >
-              Estimate fee
-            </Button>
-          )}
-          {sendStatus === 'confirm' && (
-            <Button
-              fullWidth
-              onClick={onConfirm}
-              disabled={isLoading}
-            >
+          {sendStatus !== 'done' && (
+            <Button fullWidth onClick={onConfirm} disabled={disableSend}>
               {isLoading ? 'Sending…' : 'Send'}
             </Button>
           )}
@@ -984,6 +1248,7 @@ function ReceiveView({
   const [faucetState, setFaucetState] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [faucetError, setFaucetError] = useState<string | null>(null);
   const [faucetTxHash, setFaucetTxHash] = useState<string | null>(null);
+  const [faucetOpened, setFaucetOpened] = useState(false);
   const [copied, setCopied] = useState(false);
 
   const handleCopy = () => {
@@ -992,12 +1257,32 @@ function ReceiveView({
     setTimeout(() => setCopied(false), 2000);
   };
 
+  /** Opens an external faucet page in a new browser tab when one is returned. */
+  const openExternalFaucet = (url: string) => {
+    // The popup/sidepanel cannot fetch cross-origin, but a plain tab open is
+    // allowed. The user completes any CAPTCHA/login there and funds arrive at
+    // the pre-filled address.
+    if (typeof chrome.tabs?.create === 'function') {
+      void chrome.tabs.create({ url });
+    } else {
+      window.open(url, '_blank', 'noopener,noreferrer');
+    }
+  };
+
   const handleFaucet = async () => {
     setFaucetState('loading');
     setFaucetError(null);
     setFaucetTxHash(null);
+    setFaucetOpened(false);
     const result = await requestFaucet(account.chain, account.address);
-    if (result.ok) {
+    if (result.ok && result.faucetUrl !== undefined) {
+      // External faucet (EVM always; Solana when the automatic airdrop fails):
+      // open it so the user can complete the CAPTCHA / claim flow.
+      openExternalFaucet(result.faucetUrl);
+      setFaucetState('success');
+      setFaucetOpened(true);
+    } else if (result.ok) {
+      // Fully automatic airdrop (Solana RPC success / Stellar Friendbot).
       setFaucetState('success');
       setFaucetTxHash(result.txHash ?? null);
     } else {
@@ -1007,8 +1292,8 @@ function ReceiveView({
   };
 
   const faucetHint: Record<string, string> = {
-    evm: 'Funds arrive automatically after clicking — Sepolia ETH is limited by public faucets.',
-    solana: '0.1 SOL is airdropped to this devnet address.',
+    evm: 'Sepolia faucets need a CAPTCHA — we open one in a new tab with your address pre-filled.',
+    solana: '0.1 SOL is airdropped automatically. If that fails, the web faucet opens in a new tab.',
     stellar: 'Friendbot funds this testnet address (10,000 XLM).',
   };
 
@@ -1023,6 +1308,11 @@ function ReceiveView({
         <p className="font-body text-sm text-content-secondary">
           Your <span className="font-mono">{account.chain}</span> address
         </p>
+
+        <div className="flex items-center justify-center rounded-2xl bg-white p-3">
+          <QRCode value={account.address} size={220} />
+        </div>
+
         <Card className="w-full">
           <p className="font-mono text-xs text-content-primary break-all text-center">
             {account.address}
@@ -1038,12 +1328,22 @@ function ReceiveView({
           </Button>
           <p className="mt-2 font-body text-xs text-content-tertiary text-center">{faucetHint[account.chain]}</p>
 
-          {faucetState === 'success' && faucetTxHash !== null && (
+          {faucetState === 'success' && faucetOpened && (
+            <div className="mt-2 rounded-xl border border-surface-600 bg-surface-700/60 p-3">
+              <p className="font-body text-xs font-medium text-content-primary text-center">
+                Faucet opened in a new tab.
+              </p>
+              <p className="mt-1 font-body text-xs text-content-secondary text-center">
+                Complete the CAPTCHA there with this address to receive testnet funds.
+              </p>
+            </div>
+          )}
+          {faucetState === 'success' && !faucetOpened && faucetTxHash !== null && (
             <p className="mt-2 font-mono text-[10px] text-success break-all text-center">
               Requested. Tx: {faucetTxHash.slice(0, 18)}…
             </p>
           )}
-          {faucetState === 'success' && faucetTxHash === null && (
+          {faucetState === 'success' && !faucetOpened && faucetTxHash === null && (
             <p className="mt-2 font-body text-xs text-success text-center">Funds requested.</p>
           )}
           {faucetState === 'error' && (

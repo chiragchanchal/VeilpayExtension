@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Icon } from '@/ui/components/Icon';
 import { t } from '@/i18n';
 import { Button } from '@/ui/components/Button';
 import { Card } from '@/ui/components/Card';
@@ -67,7 +68,7 @@ export function X402Approval({
       <div className="flex flex-1 flex-col gap-4">
         <div className="flex flex-col items-center justify-center gap-3 py-6">
           <div className="flex h-14 w-14 items-center justify-center rounded-full bg-accent-primary/20">
-            <span className="text-2xl">💳</span>
+            <Icon name="card" className="h-7 w-7" />
           </div>
           <h2 className="font-display text-lg font-semibold text-content-primary">
             {t('x402.paymentTitle')}

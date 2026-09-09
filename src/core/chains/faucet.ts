@@ -24,6 +24,8 @@ export interface FaucetSuccess {
   chain: ChainId;
   /** On-chain reference (Solana signature / Stellar tx hash). */
   txHash?: string;
+  /** For EVM, we may provide a faucet URL to open in a browser. */
+  faucetUrl?: string;
 }
 
 export interface FaucetFailure {
@@ -47,22 +49,25 @@ export async function requestTestnetFaucet(
 ): Promise<FaucetResult> {
   switch (chain) {
     case 'evm':
-      // Public Sepolia faucets require a CAPTCHA/login and cannot be automated
-      // from an extension without an API key or backend relay. Survival rule:
-      // fail in-app with an honest explanation rather than redirecting the user
-      // to an external faucet site.
+      // Return a faucet URL that the UI will open in a new tab.
+      // User still needs to complete a CAPTCHA, but we pre-fill the address.
       return {
-        ok: false,
+        ok: true,
         chain,
-        error:
-          'Sepolia faucets require a CAPTCHA and cannot be automated. Use the Veilpay web app to request testnet ETH.',
+        faucetUrl: `https://sepoliafaucet.com/?address=${encodeURIComponent(address)}`,
       };
     case 'solana':
       try {
         const hash = await solanaAirdrop(address);
         return { ok: true, chain, txHash: hash };
       } catch (cause) {
-        return { ok: false, chain, error: messageOf(cause) };
+        // If the automatic RPC airdrop is rate-limited or down, fall back to
+        // the Solana devnet faucet in a browser tab so the user still gets SOL.
+        return {
+          ok: true,
+          chain,
+          faucetUrl: `https://faucet.solana.com/?mode=devnet&address=${encodeURIComponent(address)}`,
+        };
       }
     case 'stellar':
       try {

@@ -73,6 +73,14 @@ export const RequestKind = z.enum([
   'solana.signTransaction',
   'solana.signMessage',
   'faucet.request',
+  'wc.pair',
+  'wc.proposal.pending',
+  'wc.proposal.approve',
+  'wc.proposal.reject',
+  'wc.session.list',
+  'wc.session.disconnect',
+  'wc.request.pending',
+  'wc.request.resolve',
 ]);
 export type RequestKind = z.infer<typeof RequestKind>;
 
@@ -207,13 +215,84 @@ const Passphrase = z.string().min(1).max(1024);
 /** A non-negative integer as a decimal string (`bigint` cannot cross the bus). */
 const Decimal = z.string().regex(/^\d+$/, 'Amount must be a non-negative integer.');
 const MaxUint256 = 2n ** 256n - 1n;
-const NativeAmount = Decimal.refine(
-  (value) => {
-    const n = BigInt(value);
-    return n >= 0n && n <= MaxUint256;
-  },
-  { message: 'Amount is outside the representable range.' },
+
+/**
+ * A non-negative, fractional decimal amount as a string, in human-readable
+ * token units (e.g. "0.5" for half an XLM/ETH/SOL). The background converts to
+ * base units using the chain's decimals. Unlike `NativeAmount` this allows a
+ * fractional part, so the send form can accept "0.001" instead of requiring
+ * the caller to pre-compute base units.
+ */
+const NativeDecimal = z
+  .string()
+  .regex(/^(0|[1-9]\d*)(\.\d+)?$/, 'Amount must be a non-negative decimal number.')
+  .refine((value) => {
+    // Bound the magnitude so conversion cannot overflow a uint256 base amount.
+    // Guard the BigInt math: zod runs this refine even when the regex above
+    // failed, so a non-numeric input must yield `false`, not throw.
+    const m = /^(0|[1-9]\d*)(?:\.(\d+))?$/.exec(value);
+    if (m === null) return false;
+    const whole = m[1] ?? '0';
+    const frac = m[2] ?? '';
+    const scaleRequired = frac.length;
+    if (scaleRequired > 30) return false;
+    let scaled: bigint;
+    try {
+      scaled = BigInt(whole) * 10n ** BigInt(scaleRequired) + BigInt(frac || '0');
+    } catch {
+      return false;
+    }
+    return scaled <= MaxUint256;
+  }, { message: 'Amount is outside the representable range.' });
+
+/**
+ * A Stellar asset to pay in. Defaults to native XLM. An issued token is
+ * identified by its asset code and issuer address so the payment op is built
+ * with the correct ASSET_TYPE_CREDIT_ALPHANUM4/12.
+ */
+const StellarAsset = z.object({
+  type: z.literal('native'),
+}).or(
+  z.object({
+    type: z.literal('issued'),
+    /** Asset code, 1–12 chars (ASCII). */
+    code: z.string().regex(/^[A-Za-z0-9]{1,12}$/),
+    /** Issuer Stellar strkey (G...). */
+    issuer: z.string().regex(/^G[A-Z2-7]{55}$/),
+  }),
 );
+export type StellarAssetInput = z.infer<typeof StellarAsset>;
+
+/**
+ * Which token a send is denominated in. Spanning all three chains:
+ *   - `native` — XLM / ETH / SOL;
+ *   - `stellar-issued` — a Stellar asset (code + issuer);
+ *   - `erc20` — an EVM ERC20 contract address;
+ *   - `spl` — a Solana SPL token mint (base58).
+ * The background resolves `decimals` and the spendable balance for the chosen
+ * token, then converts the human-readable `amount` to base units.
+ */
+const TokenInput = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('native') }),
+  z.object({
+    kind: z.literal('stellar-issued'),
+    /** Asset code, 1–12 chars (ASCII). */
+    code: z.string().regex(/^[A-Za-z0-9]{1,12}$/),
+    /** Issuer Stellar strkey (G...). */
+    issuer: z.string().regex(/^G[A-Z2-7]{55}$/),
+  }),
+  z.object({
+    kind: z.literal('erc20'),
+    /** ERC20 contract address (0x + 40 hex). */
+    address: z.string().regex(/^0x[0-9a-fA-F]{40}$/),
+  }),
+  z.object({
+    kind: z.literal('spl'),
+    /** SPL token mint, base58 encoded. */
+    mint: z.string().min(32).max(44),
+  }),
+]);
+export type TokenInputType = z.infer<typeof TokenInput>;
 
 export const VaultCreateRequest = baseEnvelope.extend({
   kind: z.literal('vault.create'),
@@ -265,14 +344,22 @@ export const GrantCaps = z.object({
 });
 export type GrantCaps = z.infer<typeof GrantCaps>;
 
-/** Shared body for the two transfer kinds. `amountNative` is in base units. */
+/** Shared body for the two transfer kinds. `amount` is in human-readable units. */
 const TransferPayload = {
   chain: ChainId,
   /** BIP-44 account index whose key signs the transfer. */
   index: z.number().int().nonnegative(),
   /** Chain-specific address (EVM hex, Solana base58, Stellar strkey). */
   to: z.string().min(1),
-  amountNative: NativeAmount,
+  /** Amount in human-readable token units (e.g. "0.5"). Converted to base units in the background. */
+  amount: NativeDecimal,
+  /**
+   * Asset to pay in. `native` (default), a Stellar issued asset, an ERC20
+   * contract, or an SPL mint. Back-compat: the legacy `asset` field (Stellar
+   * native/issued) is still accepted and normalized to `token`.
+   */
+  asset: StellarAsset.optional(),
+  token: TokenInput.optional(),
 };
 
 export const TxEstimateRequest = baseEnvelope.extend({
@@ -571,6 +658,67 @@ export const FaucetRequest = baseEnvelope.extend({
   }),
 });
 
+/**
+ * WalletConnect pairing and session management.
+ *
+ * These flow through the same typed, Zod-validated bus as every other request.
+ * `wc.pair` carries a WC URI pasted from a dapp's QR code / deep link;
+ * proposals and session requests arrive over the relay and are surfaced to the
+ * approval surface via the pending stores, exactly like dapp connection requests.
+ */
+export const WcPairRequest = baseEnvelope.extend({
+  kind: z.literal('wc.pair'),
+  payload: z.object({
+    /** A `wc:` URI from a dapp QR code or deep link. */
+    uri: z.string().regex(/^wc:/),
+  }),
+});
+
+export const WcProposalPendingRequest = baseEnvelope.extend({
+  kind: z.literal('wc.proposal.pending'),
+  payload: z.object({}),
+});
+
+export const WcProposalApproveRequest = baseEnvelope.extend({
+  kind: z.literal('wc.proposal.approve'),
+  payload: z.object({
+    proposalId: z.number().int().positive(),
+    /** Addresses to grant the dapp. First approved EVM account when empty. */
+    accounts: z.array(z.string()).default([]),
+  }),
+});
+
+export const WcProposalRejectRequest = baseEnvelope.extend({
+  kind: z.literal('wc.proposal.reject'),
+  payload: z.object({
+    proposalId: z.number().int().positive(),
+  }),
+});
+
+export const WcSessionListRequest = baseEnvelope.extend({
+  kind: z.literal('wc.session.list'),
+  payload: z.object({}),
+});
+
+export const WcSessionDisconnectRequest = baseEnvelope.extend({
+  kind: z.literal('wc.session.disconnect'),
+  payload: z.object({
+    topic: z.string().min(1),
+  }),
+});
+
+export const WcRequestPendingRequest = baseEnvelope.extend({
+  kind: z.literal('wc.request.pending'),
+  payload: z.object({}),
+});
+
+export const WcRequestResolveRequest = baseEnvelope.extend({
+  kind: z.literal('wc.request.resolve'),
+  payload: z.object({
+    action: z.enum(['approve', 'deny']),
+  }),
+});
+
 export const Request = z.discriminatedUnion('kind', [
   PingRequest,
   VaultStatusRequest,
@@ -616,6 +764,14 @@ export const Request = z.discriminatedUnion('kind', [
   SolanaSignTransactionRequest,
   SolanaSignMessageRequest,
   FaucetRequest,
+  WcPairRequest,
+  WcProposalPendingRequest,
+  WcProposalApproveRequest,
+  WcProposalRejectRequest,
+  WcSessionListRequest,
+  WcSessionDisconnectRequest,
+  WcRequestPendingRequest,
+  WcRequestResolveRequest,
 ]);
 export type Request = z.infer<typeof Request>;
 
@@ -696,6 +852,9 @@ export const ResponseErr = z.object({
       // The chain/node rejected a broadcast (e.g. insufficient funds).
       // Message carries the display-safe node reason.
       'TX_REJECTED',
+      // The wallet itself rejected a send before broadcast because the
+      // spendable balance (in base units) is below the amount plus fee.
+      'INSUFFICIENT_BALANCE',
     ]),
     /** Safe for display. Never contains key material or stack traces. */
     message: z.string(),
@@ -735,24 +894,34 @@ export interface ResponseData {
     nextCursor: string | null;
     source: 'remote' | 'cache';
   };
-  /** Fee preview for a transfer, in base units (wei). Nothing is broadcast. */
+  /** Fee preview for a transfer. Fee is in base units (stroops / lamports / wei). Nothing is broadcast. */
   'tx.estimate': {
     chain: ChainId;
     /** Sender address that would sign. */
     from: string;
-    /** Total fee = gasLimit * maxFeePerGas, in wei. */
+    /** Total fee in base units. */
     feeNative: string;
     gasLimit: string;
+    /** Asset code being sent, for Stellar issued tokens. */
+    assetCode?: string;
+    /** Decimal places of the chosen token (18 ETH, ERC20 decimals(), 9 SOL/SPL, 7 XLM). */
+    decimals: number;
+    /** Spendable token balance for the sender, in base units (string of a bigint). */
+    spendableBalance: string;
+    /** Display symbol of the chosen token (e.g. "USDC"); falls back to native symbol. */
+    symbol?: string;
   };
   /** A transfer that was built, signed, and broadcast. */
   'tx.transfer': {
     chain: ChainId;
     from: string;
     to: string;
-    /** Amount moved, in wei. */
+    /** Amount moved, in base units (wei / lamports / stroops). */
     amountNative: string;
     /** Transaction hash, once broadcast. */
     hash: string;
+    /** Decimal places of the token that was sent. */
+    decimals: number;
   };
   'vault.create': { state: VaultState };
   'vault.unlock': { state: VaultState; unlockedUntil: number | null };
@@ -838,7 +1007,51 @@ export interface ResponseData {
   'solana.signTransaction': { signature: string; signedTransaction: string };
   /** Signed message. */
   'solana.signMessage': { signature: string; publicKey: string };
-  'faucet.request': { ok: boolean; txHash?: string };
+  'faucet.request': { ok: boolean; txHash?: string; faucetUrl?: string };
+  /** A WalletConnect pair() was accepted; the proposal may follow async. */
+  'wc.pair': { ok: boolean };
+  /** Pending WalletConnect session proposal awaiting approval, if any. */
+  'wc.proposal.pending': {
+    id: number;
+    /** Display name of the requesting dapp. */
+    name: string;
+    /** Dapp origin/URL, for the user to verify. */
+    url: string;
+    /** Requested chain namespaces, e.g. `{"eip155": [...chains]}`. */
+    requiredNamespaces: Record<string, { chains: string[]; methods: string[]; events: string[] }>;
+    /** Optional chain namespaces, when present. */
+    optionalNamespaces?: Record<string, { chains: string[]; methods: string[]; events: string[] }>;
+    expiry: number;
+    createdAt: number;
+  } | null;
+  'wc.proposal.approve': { ok: boolean };
+  'wc.proposal.reject': { ok: boolean };
+  /** Active WalletConnect sessions. */
+  'wc.session.list': Array<{
+    topic: string;
+    /** Display name of the connected dapp. */
+    name: string;
+    /** Dapp origin/URL. */
+    url: string;
+    /** Connected account addresses. */
+    accounts: string[];
+    /** When the session was established. */
+    createdAt: number;
+    /** ISO expiry timestamp. */
+    expiry: string;
+  }>;
+  'wc.session.disconnect': { ok: boolean };
+  /** Pending WalletConnect session request awaiting approval, if any. */
+  'wc.request.pending': {
+    topic: string;
+    requestId: number;
+    chainId: string;
+    method: string;
+    /** Human-readable hint of what the dapp asked (e.g. signed message length). */
+    hint: string;
+    createdAt: number;
+  } | null;
+  'wc.request.resolve': { ok: boolean };
 }
 
 export function newId(): string {

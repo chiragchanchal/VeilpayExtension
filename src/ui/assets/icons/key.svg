@@ -1,0 +1,17 @@
+<svg viewBox="0 0 128 128" width="128" height="128" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="vpKeyGold" x1="100%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FFE785"/>
+      <stop offset="45%" stop-color="#F5B82E"/>
+      <stop offset="85%" stop-color="#B86A08"/>
+      <stop offset="100%" stop-color="#6B3300"/>
+    </linearGradient>
+  </defs>
+  <!-- Shaft & Ward Teeth -->
+  <path d="M 72 56 L 28 100 L 38 110 L 46 102 L 52 108 L 62 98 L 56 92 L 68 80 L 80 80 Z" fill="url(#vpKeyGold)"/>
+  <!-- Veilpay Shield-Profile Bow -->
+  <path d="M 82 16 C 89 14 96 16 102 20 L 114 30 C 118 35 118 42 114 48 L 96 66 C 92 70 86 72 80 70 L 68 62 L 68 50 L 76 38 Z" 
+        fill="url(#vpKeyGold)"/>
+  <!-- Internal Bow Cutout -->
+  <polygon points="86,30 102,40 92,54 80,44" fill="#120B02"/>
+</svg>

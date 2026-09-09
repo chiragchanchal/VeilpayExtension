@@ -122,8 +122,8 @@ describe('side panel', () => {
 
     render(<App />);
 
-    const sendBtn = await screen.findByRole('button', { name: 'Send' });
-    await user.click(sendBtn);
+    const sendBtn = await screen.findAllByRole('button', { name: 'Send' });
+    await user.click(sendBtn[0]!);
 
     // The side panel calls chrome.action.openPopup() when a send/receive/import
     // button is clicked (those flows live in the popup).

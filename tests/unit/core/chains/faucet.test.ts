@@ -34,7 +34,7 @@ describe('requestTestnetFaucet', () => {
     expect(body.params[1]).toBe(SOLANA_FAUCET_AMOUNT_lamports.toString());
   });
 
-  it('surfaces a Solana airdrop RPC error', async () => {
+  it('falls back to the Solana web faucet when the automatic airdrop fails', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () =>
@@ -42,8 +42,11 @@ describe('requestTestnetFaucet', () => {
       ),
     );
     const result = await requestTestnetFaucet('solana', 'bad');
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toContain('Invalid request');
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.faucetUrl).toContain('faucet.solana.com');
+      expect(result.faucetUrl).toContain(encodeURIComponent('bad'));
+    }
   });
 
   it('funds a Stellar address via Friendbot', async () => {
@@ -58,11 +61,12 @@ describe('requestTestnetFaucet', () => {
     expect(url).toContain(encodeURIComponent('GA...'));
   });
 
-  it('fails in-app for EVM (CAPTCHA-bound, not automatable, no redirect)', async () => {
-    const result = await requestTestnetFaucet('evm', '0x0');
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error).toContain('CAPTCHA');
+  it('returns the Sepolia web faucet URL for EVM (CAPTCHA-bound)', async () => {
+    const result = await requestTestnetFaucet('evm', '0xabc123');
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.faucetUrl).toContain('sepoliafaucet.com');
+      expect(result.faucetUrl).toContain(encodeURIComponent('0xabc123'));
     }
   });
 

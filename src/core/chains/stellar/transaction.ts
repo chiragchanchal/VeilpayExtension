@@ -11,18 +11,18 @@ import { base32 } from '@scure/base';
 import { ed25519 } from '@noble/curves/ed25519';
 import { sha256 } from '@noble/hashes/sha256';
 
-/** An unsigned Stellar native payment. */
-export interface UnsignedStellarPayment {
-  /** Stellar address (G...) of the sender. */
-  from: string;
-  /** Stellar address (G...) of the recipient. */
-  to: string;
-  /** Amount in stroops (10^-7 XLM). */
-  amount: bigint;
-  /** Account sequence number from Horizon. */
-  sequence: bigint;
-  /** Base fee in stroops (typically 100). */
-  fee: number;
+/**
+ * A Stellar asset to pay in — native XLM or an issued token.
+ * Issued assets are identified on-chain by an asset code (1–12 ASCII chars)
+ * and the issuer's strkey address. Stellar scales every asset's amount the
+ * same way as XLM: the smallest unit is 10^-7 of the whole token.
+ */
+export interface StellarAssetXdr {
+  type: 'native' | 'issued';
+  /** Asset code (1–12 chars) for issued assets. */
+  code?: string;
+  /** Issuer strkey (G...) for issued assets. */
+  issuer?: string;
 }
 
 /** A fully signed, broadcast-ready Stellar transaction. */
@@ -33,6 +33,48 @@ export interface SignedStellarTransaction {
   signingHash: string;
   /** Recovered sender address. */
   from: string;
+}
+
+/** The Stellar public testnet network passphrase. */
+export const STELLAR_TESTNET_PASSPHRASE = 'Test SDF Network ; September 2015';
+
+/**
+ * Computes a Stellar network ID, i.e. `sha256(networkPassphrase)` over the raw
+ * passphrase bytes. Used to build the signature base so signatures bind to the
+ * intended network (testnet vs future mainnet).
+ */
+function stellarNetworkId(passphrase: string): Uint8Array {
+  return sha256(new TextEncoder().encode(passphrase));
+}
+
+/**
+ * Builds the canonical signing pre-image for a transaction: the network ID
+ * followed by the tagged transaction, as defined by Stellar's
+ * `TransactionSignaturePayload`. The ed25519 signature is over the SHA-256 of
+ * exactly these bytes, so omitting the network prefix produces an invalid
+ * signature (`tx_bad_auth`) on live networks.
+ */
+function stellarSignatureBase(networkId: Uint8Array, txXdr: Uint8Array): Uint8Array {
+  const ENVELOPE_TYPE_TX = 2;
+  return concat([networkId, xdrUint32(ENVELOPE_TYPE_TX), txXdr]);
+}
+
+/** An unsigned Stellar payment. */
+export interface UnsignedStellarPayment {
+  /** Stellar address (G...) of the sender. */
+  from: string;
+  /** Stellar address (G...) of the recipient. */
+  to: string;
+  /** Amount in the asset's smallest unit (stroops, 10^-7 of the whole token). */
+  amount: bigint;
+  /** Asset to pay in. Defaults to native XLM. */
+  asset?: StellarAssetXdr;
+  /** Account sequence number from Horizon. */
+  sequence: bigint;
+  /** Base fee in stroops (typically 100). */
+  fee: number;
+  /** Network passphrase. Defaults to the Stellar testnet passphrase. */
+  networkPassphrase?: string;
 }
 
 /**
@@ -139,18 +181,58 @@ function xdrPublicKey(raw: Uint8Array): Uint8Array {
   return concat([xdrUint32(0), raw]); // PUBLIC_KEY_TYPE_ED25519 = 0
 }
 
+/** ASCII asset code padded with NUL bytes to the fixed XDR length. */
+function xdrAssetCode(code: string, length: number): Uint8Array {
+  const out = new Uint8Array(length);
+  for (let i = 0; i < code.length; i += 1) {
+    out[i] = code.charCodeAt(i) & 0xff;
+  }
+  return out;
+}
+
+/**
+ * Encodes an Asset union.
+ * XDR:
+ *   union Asset switch (AssetType type) {
+ *     case ASSET_TYPE_NATIVE: void;
+ *     case ASSET_TYPE_CREDIT_ALPHANUM4: AlphaNum4;
+ *     case ASSET_TYPE_CREDIT_ALPHANUM12: AlphaNum12;
+ *   };
+ * AssetType: ASSET_TYPE_NATIVE=0, CREDIT_ALPHANUM4=1, CREDIT_ALPHANUM12=2.
+ * AlphaNum4 { opaque assetCode[4]; AccountID issuer; }
+ * AlphaNum12 { opaque assetCode[12]; AccountID issuer; }
+ */
+function xdrAsset(asset: StellarAssetXdr): Uint8Array {
+  if (asset.type === 'native' || asset.code === undefined || asset.issuer === undefined) {
+    return xdrUint32(0); // ASSET_TYPE_NATIVE
+  }
+  const issuer = decodeStellarAddress(asset.issuer);
+  if (asset.code.length <= 4) {
+    return concat([
+      xdrUint32(1), // ASSET_TYPE_CREDIT_ALPHANUM4
+      xdrAssetCode(asset.code, 4),
+      xdrPublicKey(issuer),
+    ]);
+  }
+  return concat([
+    xdrUint32(2), // ASSET_TYPE_CREDIT_ALPHANUM12
+    xdrAssetCode(asset.code, 12),
+    xdrPublicKey(issuer),
+  ]);
+}
+
 /**
  * Encodes a PaymentOp struct.
  * XDR: AccountID destination + Asset asset + int64 amount.
  */
-function xdrPaymentOp(destPubkey: Uint8Array, amount: bigint): Uint8Array {
+function xdrPaymentOp(destPubkey: Uint8Array, amount: bigint, asset: StellarAssetXdr): Uint8Array {
   // AccountID = PublicKey = PUBLIC_KEY_TYPE_ED25519 (0) + 32 bytes
   const destination = xdrPublicKey(destPubkey);
-  // Asset = ASSET_TYPE_NATIVE = 0
-  const asset = xdrUint32(0);
+  // Asset — native XLM by default, or the requested issued token.
+  const assetXdr = xdrAsset(asset);
   // Amount = int64
   const amountXdr = xdrInt64(amount);
-  return concat([destination, asset, amountXdr]);
+  return concat([destination, assetXdr, amountXdr]);
 }
 
 /**
@@ -166,14 +248,18 @@ function xdrPaymentOp(destPubkey: Uint8Array, amount: bigint): Uint8Array {
  * 1 (present) is a uint32. Using a single byte shifts the whole operation and
  * Horizon rejects the envelope as undecodable.
  */
-function xdrPaymentOperation(destPubkey: Uint8Array, amount: bigint): Uint8Array {
+function xdrPaymentOperation(
+  destPubkey: Uint8Array,
+  amount: bigint,
+  asset: StellarAssetXdr,
+): Uint8Array {
   const nullSourcePointer = xdrUint32(0); // MuxedAccount* = null
-  const body = concat([xdrUint32(1), xdrPaymentOp(destPubkey, amount)]); // PAYMENT = 1
+  const body = concat([xdrUint32(1), xdrPaymentOp(destPubkey, amount, asset)]); // PAYMENT = 1
   return concat([nullSourcePointer, body]);
 }
 
 /**
- * Encodes a Transaction XDR struct for a native payment.
+ * Encodes a Transaction XDR struct for a payment.
  */
 function xdrTransaction(
   sourcePubkey: Uint8Array,
@@ -181,6 +267,7 @@ function xdrTransaction(
   seqNum: bigint,
   destPubkey: Uint8Array,
   amount: bigint,
+  asset: StellarAssetXdr,
 ): Uint8Array {
   // sourceAccount: AccountID = PUBLIC_KEY_TYPE_ED25519 + 32 bytes
   const sourceAccount = xdrPublicKey(sourcePubkey);
@@ -193,7 +280,7 @@ function xdrTransaction(
   // memo: MEMO_NONE = 0
   const memo = xdrUint32(0);
   // operations: Operation[] = [payment operation]
-  const operations = xdrArray([xdrPaymentOperation(destPubkey, amount)]);
+  const operations = xdrArray([xdrPaymentOperation(destPubkey, amount, asset)]);
   // ext: v=0
   const ext = xdrUint32(0);
 
@@ -213,7 +300,10 @@ function xdrTransaction(
 // ---------------------------------------------------------------------------
 
 /**
- * Builds, signs, and serializes a Stellar native (XLM) payment transaction.
+ * Builds, signs, and serializes a Stellar payment transaction.
+ *
+ * Defaults to a native XLM payment; pass `tx.asset` with `type: 'issued'` to
+ * send a specific testnet token (asset code + issuer).
  *
  * @param tx - The unsigned payment parameters.
  * @param privateKey - 32-byte ed25519 private key (from vault).
@@ -232,17 +322,30 @@ export function signStellarPayment(
   const sourcePubkey = decodeStellarAddress(tx.from);
   const destPubkey = decodeStellarAddress(tx.to);
 
+  const asset: StellarAssetXdr = tx.asset ?? { type: 'native' };
+
+  // Stellar requires a transaction's seqNum to be the account's CURRENT
+  // sequence + 1 (Horizon advances the account's sequence to the tx seqNum
+  // once it is included). `tx.sequence` is Horizon's current value, so bump it.
+  const seqNum = tx.sequence + 1n;
+
   // Build the Transaction XDR
   const txXdr = xdrTransaction(
     sourcePubkey,
     tx.fee,
-    tx.sequence,
+    seqNum,
     destPubkey,
     tx.amount,
+    asset,
   );
 
-  // The transaction hash is SHA-256 of the Transaction XDR
-  const txHash = sha256(txXdr);
+  // The network transaction hash is the SHA-256 of the Stellar signature
+  // pre-image: `networkId || taggedTransaction`, where networkId binds the
+  // transaction to the network's passphrase. Signing only sha256(txXdr)
+  // (without the network prefix) makes a signature Horizon always rejects with
+  // tx_bad_auth, even though the XDR itself is valid.
+  const networkId = stellarNetworkId(tx.networkPassphrase ?? STELLAR_TESTNET_PASSPHRASE);
+  const txHash = sha256(stellarSignatureBase(networkId, txXdr));
 
   // Sign the hash
   const signature = ed25519.sign(txHash, privateKey);

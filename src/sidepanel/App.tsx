@@ -2,13 +2,17 @@ import { useEffect, useState } from 'react';
 import { t } from '@/i18n';
 import { useWallet } from '@/ui/store/useWallet';
 import { Button } from '@/ui/components/Button';
+import { Card } from '@/ui/components/Card';
 import { Input } from '@/ui/components/Input';
 import { TestnetBanner } from '@/ui/components/TestnetBanner';
+import { Icon, type IconName } from '@/ui/components/Icon';
 import { Dashboard } from '@/ui/components/Dashboard';
+import { TransactionHistoryView } from '@/ui/components/TransactionHistoryView';
 import { ConnectionApproval } from '@/ui/components/ConnectionApproval';
 import { TransactionApproval } from '@/ui/components/TransactionApproval';
 import { X402Approval } from '@/ui/components/X402Approval';
 import { GrantApproval } from '@/ui/components/GrantApproval';
+import { WalletConnectView } from '@/ui/components/WalletConnectView';
 
 /** Full-height wallet companion surface for approvals and quick account access. */
 export default function SidePanelApp() {
@@ -21,6 +25,7 @@ export default function SidePanelApp() {
   } = useWallet();
   const [unlockPassphrase, setUnlockPassphrase] = useState('');
   const [unlockError, setUnlockError] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<'wallet' | 'activity' | 'settings' | 'connect'>('wallet');
 
   useEffect(() => {
     void refresh();
@@ -164,7 +169,7 @@ export default function SidePanelApp() {
       <main className="flex min-h-screen flex-col gap-4 p-4">
         {header}
         <div className="flex flex-1 flex-col items-center justify-center gap-4 text-center">
-          <div className="flex h-12 w-12 items-center justify-center rounded-full bg-surface-700"><span className="text-xl">🪄</span></div>
+          <div className="flex h-12 w-12 items-center justify-center rounded-full bg-surface-700"><Icon name="wand" className="h-6 w-6" /></div>
           <h2 className="font-display text-base font-semibold text-content-primary">{t('wallet.noWallet')}</h2>
           <p className="font-body text-sm text-content-secondary max-w-xs">{t('wallet.noWalletDescription')}</p>
           <Button fullWidth onClick={openPopup}>{t('wallet.openPopup')}</Button>
@@ -178,7 +183,7 @@ export default function SidePanelApp() {
       <main className="flex min-h-screen flex-col gap-4 p-4">
         {header}
         <div className="flex flex-1 flex-col items-center justify-center gap-4">
-          <div className="flex h-12 w-12 items-center justify-center rounded-full bg-surface-700"><span className="text-xl">🔒</span></div>
+          <div className="flex h-12 w-12 items-center justify-center rounded-full bg-surface-700"><Icon name="lock" className="h-6 w-6" /></div>
           <p className="font-body text-sm text-content-secondary">{t('wallet.locked')}</p>
           <div className="w-full max-w-sm">
             <Input
@@ -203,12 +208,67 @@ export default function SidePanelApp() {
     );
   }
 
+  const tabs: { key: 'wallet' | 'activity' | 'settings' | 'connect'; label: string; icon: IconName }[] = [
+    { key: 'wallet', label: 'Wallet', icon: 'card' },
+    { key: 'activity', label: t('settings.transactions'), icon: 'send' },
+    { key: 'connect', label: 'Connect', icon: 'link' },
+    { key: 'settings', label: t('common.settings'), icon: 'key' },
+  ];
+
   return (
-    <div className="flex min-h-screen flex-col gap-3 p-4">
-      {header}
-      <TestnetBanner />
-      <Dashboard accounts={accounts} onSend={openPopup} onReceive={openPopup} onImport={openPopup} onLock={() => void lock()} />
-      <Button variant="ghost" fullWidth onClick={() => void chrome.runtime.openOptionsPage()}>{t('common.settings')}</Button>
+    <div className="flex min-h-screen flex-col">
+      <div className="flex-1 overflow-y-auto p-4">
+        {activeTab === 'wallet' && (
+          <div className="flex flex-col gap-3">
+            {header}
+            <TestnetBanner />
+            <Dashboard
+              accounts={accounts}
+              onSend={openPopup}
+              onReceive={openPopup}
+              onImport={openPopup}
+              onLock={() => void lock()}
+            />
+          </div>
+        )}
+        {activeTab === 'activity' && <TransactionHistoryView />}
+        {activeTab === 'connect' && <WalletConnectView />}
+        {activeTab === 'settings' && (
+          <div className="flex flex-col gap-3">
+            {header}
+            <Card title={t('common.settings')}>
+              <div className="flex flex-col gap-2">
+                <Button variant="secondary" fullWidth onClick={() => void lock()}>
+                  {t('common.lock')}
+                </Button>
+                <Button variant="ghost" fullWidth onClick={openPopup}>
+                  {t('common.import')}
+                </Button>
+                <Button variant="ghost" fullWidth onClick={() => void chrome.runtime.openOptionsPage()}>
+                  {t('common.settings')}
+                </Button>
+              </div>
+            </Card>
+          </div>
+        )}
+      </div>
+      <nav className="flex shrink-0 justify-around border-t border-surface-600 bg-surface-800 px-2 py-2">
+        {tabs.map((tab) => (
+          <button
+            key={tab.key}
+            type="button"
+            onClick={() => setActiveTab(tab.key)}
+            className={`flex flex-1 flex-col items-center gap-0.5 rounded-lg px-2 py-1.5 font-body text-xs transition-colors ${
+              activeTab === tab.key
+                ? 'bg-accent-primary/20 text-content-primary font-semibold'
+                : 'text-content-tertiary hover:bg-surface-700 hover:text-content-secondary'
+            }`}
+          >
+            <Icon name={tab.icon} className="h-4 w-4" />
+            {tab.label}
+          </button>
+        ))}
+      </nav>
     </div>
   );
 }

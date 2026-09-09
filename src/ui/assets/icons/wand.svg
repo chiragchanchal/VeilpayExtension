@@ -1,0 +1,17 @@
+<svg viewBox="0 0 128 128" width="128" height="128" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="vpWandGold" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#733800"/>
+      <stop offset="35%" stop-color="#C2730C"/>
+      <stop offset="70%" stop-color="#F5B82E"/>
+      <stop offset="100%" stop-color="#FFF3B0"/>
+    </linearGradient>
+  </defs>
+  <!-- Shaft -->
+  <rect x="22" y="94" width="14" height="66" rx="7" transform="rotate(-45 22 94)" fill="url(#vpWandGold)"/>
+  <!-- Large 4-Point Star -->
+  <path d="M 94 14 Q 94 34 114 34 Q 94 34 94 54 Q 94 34 74 34 Q 94 34 94 14 Z" fill="#FFE785"/>
+  <!-- Secondary Sparkles -->
+  <path d="M 108 58 Q 108 66 116 66 Q 108 66 108 74 Q 108 66 100 66 Q 108 66 108 58 Z" fill="#F5B82E"/>
+  <path d="M 64 16 Q 64 22 70 22 Q 64 22 64 28 Q 64 22 58 22 Q 64 22 64 16 Z" fill="#F5B82E"/>
+</svg>

@@ -1,0 +1,17 @@
+<svg viewBox="0 0 128 128" width="128" height="128" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="vpTrayGold" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FFE785"/>
+      <stop offset="50%" stop-color="#F5B82E"/>
+      <stop offset="100%" stop-color="#733800"/>
+    </linearGradient>
+  </defs>
+  <!-- Outer Tray Shell -->
+  <path d="M 22 42 L 106 42 L 114 90 C 114 98 108 104 100 104 L 28 104 C 20 104 14 98 14 90 Z" 
+        fill="url(#vpTrayGold)"/>
+  <!-- Hollow Cavity -->
+  <polygon points="28,48 100,48 94,84 34,84" fill="#120B02"/>
+  <!-- Front Lip Cutout -->
+  <path d="M 20 86 L 46 86 L 50 96 L 78 96 L 82 86 L 108 86 L 106 96 C 105 100 101 102 97 102 L 31 102 C 27 102 23 100 22 96 Z" 
+        fill="#FFE785"/>
+</svg>

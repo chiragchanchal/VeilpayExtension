@@ -1,6 +1,13 @@
 import { create } from 'zustand';
 import { createClient } from '@/core/messaging/client';
-import type { ChainId, MessageSource, VaultState, ZkCapability } from '@/core/messaging/protocol';
+import type {
+  ChainId,
+  MessageSource,
+  StellarAssetInput,
+  TokenInputType,
+  VaultState,
+  ZkCapability,
+} from '@/core/messaging/protocol';
 import type { IndexerTx } from '@/core/chains/indexer-service';
 import type { X402Challenge } from '@/core/x402/types';
 import type { GrantCaps } from '@/core/vap/grant';
@@ -98,6 +105,34 @@ interface WalletState {
   pendingX402Payment: PendingX402Payment | null;
   /** Pending VAP grant request (set by background, shown by UI). */
   pendingGrantRequest: PendingGrantRequest | null;
+  /** Pending WalletConnect session proposal awaiting approval. */
+  pendingWcProposal: {
+    id: number;
+    name: string;
+    url: string;
+    requiredNamespaces: Record<string, { chains: string[]; methods: string[]; events: string[] }>;
+    optionalNamespaces?: Record<string, { chains: string[]; methods: string[]; events: string[] }>;
+    expiry: number;
+    createdAt: number;
+  } | null;
+  /** Active WalletConnect sessions. */
+  wcSessions: Array<{
+    topic: string;
+    name: string;
+    url: string;
+    accounts: string[];
+    createdAt: number;
+    expiry: string;
+  }>;
+  /** Pending WalletConnect request awaiting approval. */
+  pendingWcRequest: {
+    topic: string;
+    requestId: number;
+    chainId: string;
+    method: string;
+    hint: string;
+    createdAt: number;
+  } | null;
 }
 
 interface WalletActions {
@@ -110,6 +145,7 @@ interface WalletActions {
   requestFaucet(chain: ChainId, address: string): Promise<{
     ok: boolean;
     txHash?: string;
+    faucetUrl?: string;
     error?: string;
   }>;
   /**
@@ -143,8 +179,17 @@ interface WalletActions {
     chain: ChainId,
     index: number,
     to: string,
-    amountNative: string,
-  ): Promise<{ feeNative: string; gasLimit: string }>;
+    amount: string,
+    asset?: StellarAssetInput,
+    token?: TokenInputType,
+  ): Promise<{
+    feeNative: string;
+    gasLimit: string;
+    assetCode?: string;
+    decimals: number;
+    spendableBalance: string;
+    symbol?: string;
+  }>;
   /** Export a private key for a chain account. Security-sensitive. */
   exportKey(chain: ChainId, index: number): Promise<{ privateKey: string; address: string }>;
   /** Build, sign, and broadcast a transfer. Returns the tx hash. Throws on failure. */
@@ -152,8 +197,10 @@ interface WalletActions {
     chain: ChainId,
     index: number,
     to: string,
-    amountNative: string,
-  ): Promise<{ hash: string }>;
+    amount: string,
+    asset?: StellarAssetInput,
+    token?: TokenInputType,
+  ): Promise<{ hash: string; decimals: number }>;
   /** Security settings for the setup flow. Safe while locked. */
   loadSecurityStatus(): Promise<void>;
   setupSecurityPin(pin: string): Promise<boolean>;
@@ -190,6 +237,22 @@ interface WalletActions {
   ): Promise<boolean>;
   /** Starts a WebAuthn ceremony; returns the credential id and hex challenge. */
   requestWebAuthnChallenge(): Promise<{ credentialId: string; challenge: string } | null>;
+  /** WalletConnect: pair with a dapp URI. */
+  wcPair(uri: string): Promise<boolean>;
+  /** WalletConnect: load pending proposal. */
+  loadWcProposal(): Promise<void>;
+  /** WalletConnect: approve a proposal. */
+  wcApproveProposal(proposalId: number, accounts: string[]): Promise<boolean>;
+  /** WalletConnect: reject a proposal. */
+  wcRejectProposal(proposalId: number): Promise<boolean>;
+  /** WalletConnect: list sessions. */
+  loadWcSessions(): Promise<void>;
+  /** WalletConnect: disconnect a session. */
+  wcDisconnect(topic: string): Promise<boolean>;
+  /** WalletConnect: load pending request. */
+  loadWcRequest(): Promise<void>;
+  /** WalletConnect: resolve pending request (approve or deny). */
+  wcResolveRequest(action: 'approve' | 'deny'): Promise<boolean>;
 }
 
 const send = createClient('popup' as MessageSource);
@@ -231,6 +294,9 @@ export const useWallet = create<WalletState & WalletActions>((set, get) => ({
   pendingApproval: null,
   pendingX402Payment: null,
   pendingGrantRequest: null,
+  pendingWcProposal: null,
+  wcSessions: [],
+  pendingWcRequest: null,
   isLoading: false,
   error: null,
 
@@ -438,20 +504,40 @@ export const useWallet = create<WalletState & WalletActions>((set, get) => ({
     set({ accountIndex: index, accounts: [], balances: {} });
   },
 
-  estimateTransfer: async (chain, index, to, amountNative) => {
+  estimateTransfer: async (chain, index, to, amount, asset, token) => {
     set({ error: null });
     try {
-      return await send('tx.estimate', { chain, index, to, amountNative });
+      const payload: {
+        chain: ChainId;
+        index: number;
+        to: string;
+        amount: string;
+        asset?: StellarAssetInput;
+        token?: TokenInputType;
+      } = { chain, index, to, amount };
+      if (asset !== undefined) payload.asset = asset;
+      if (token !== undefined) payload.token = token;
+      return await send('tx.estimate', payload);
     } catch (cause) {
       set({ error: messageFor(cause, 'Could not estimate the transfer fee.') });
       throw cause;
     }
   },
 
-  sendTransfer: async (chain, index, to, amountNative) => {
+  sendTransfer: async (chain, index, to, amount, asset, token) => {
     set({ error: null });
     try {
-      return await send('tx.transfer', { chain, index, to, amountNative });
+      const payload: {
+        chain: ChainId;
+        index: number;
+        to: string;
+        amount: string;
+        asset?: StellarAssetInput;
+        token?: TokenInputType;
+      } = { chain, index, to, amount };
+      if (asset !== undefined) payload.asset = asset;
+      if (token !== undefined) payload.token = token;
+      return await send('tx.transfer', payload);
     } catch (cause) {
       set({ error: messageFor(cause, 'Could not send the transfer.') });
       throw cause;
@@ -628,4 +714,108 @@ export const useWallet = create<WalletState & WalletActions>((set, get) => ({
   },
 
   clearError: () => set({ error: null }),
+
+  // ---- WalletConnect -----------------------------------------------------
+
+  wcPair: async (uri) => {
+    set({ isLoading: true, error: null });
+    try {
+      await send('wc.pair', { uri });
+      return true;
+    } catch (cause) {
+      set({ error: messageFor(cause, 'Could not start the WalletConnect pairing.') });
+      return false;
+    } finally {
+      set({ isLoading: false });
+    }
+  },
+
+  loadWcProposal: async () => {
+    try {
+      const pending = await send('wc.proposal.pending', {});
+      set({ pendingWcProposal: pending ?? null });
+    } catch {
+      // Optional read; never pollute the global error state.
+      set({ pendingWcProposal: null });
+    }
+  },
+
+  wcApproveProposal: async (proposalId, accounts) => {
+    set({ isLoading: true, error: null });
+    try {
+      const { ok } = await send('wc.proposal.approve', { proposalId, accounts });
+      if (ok) {
+        set({ pendingWcProposal: null });
+        await get().loadWcSessions();
+      }
+      return ok;
+    } catch (cause) {
+      set({ error: messageFor(cause, 'Could not approve the WalletConnect request.') });
+      return false;
+    } finally {
+      set({ isLoading: false });
+    }
+  },
+
+  wcRejectProposal: async (proposalId) => {
+    set({ isLoading: true, error: null });
+    try {
+      const { ok } = await send('wc.proposal.reject', { proposalId });
+      if (ok) set({ pendingWcProposal: null });
+      return ok;
+    } catch (cause) {
+      set({ error: messageFor(cause, 'Could not reject the WalletConnect request.') });
+      return false;
+    } finally {
+      set({ isLoading: false });
+    }
+  },
+
+  loadWcSessions: async () => {
+    try {
+      const sessions = await send('wc.session.list', {});
+      set({ wcSessions: Array.isArray(sessions) ? sessions : [] });
+    } catch {
+      // Optional read; never pollute the global error state.
+      set({ wcSessions: [] });
+    }
+  },
+
+  wcDisconnect: async (topic) => {
+    set({ isLoading: true, error: null });
+    try {
+      const { ok } = await send('wc.session.disconnect', { topic });
+      if (ok) await get().loadWcSessions();
+      return ok;
+    } catch (cause) {
+      set({ error: messageFor(cause, 'Could not disconnect the session.') });
+      return false;
+    } finally {
+      set({ isLoading: false });
+    }
+  },
+
+  loadWcRequest: async () => {
+    try {
+      const pending = await send('wc.request.pending', {});
+      set({ pendingWcRequest: pending ?? null });
+    } catch {
+      // Optional read; never pollute the global error state.
+      set({ pendingWcRequest: null });
+    }
+  },
+
+  wcResolveRequest: async (action) => {
+    set({ isLoading: true, error: null });
+    try {
+      const { ok } = await send('wc.request.resolve', { action });
+      if (ok) set({ pendingWcRequest: null });
+      return ok;
+    } catch (cause) {
+      set({ error: messageFor(cause, 'Could not resolve the WalletConnect request.') });
+      return false;
+    } finally {
+      set({ isLoading: false });
+    }
+  },
 }));

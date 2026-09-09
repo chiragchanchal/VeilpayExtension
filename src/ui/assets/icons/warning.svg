@@ -1,0 +1,16 @@
+<svg viewBox="0 0 128 128" width="128" height="128" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="vpWarnGold" x1="50%" y1="10%" x2="50%" y2="100%">
+      <stop offset="0%" stop-color="#FFF0A3"/>
+      <stop offset="40%" stop-color="#F5B82E"/>
+      <stop offset="85%" stop-color="#C2730C"/>
+      <stop offset="100%" stop-color="#733800"/>
+    </linearGradient>
+  </defs>
+  <!-- Rounded Triangle Shield Body -->
+  <path d="M 64 16 C 68 16 72 20 74 24 L 113 94 C 116 99 114 106 109 110 C 106 112 103 113 100 113 L 28 113 C 22 113 16 108 16 102 C 16 99 17 96 19 94 L 54 24 C 56 20 60 16 64 16 Z" 
+        fill="url(#vpWarnGold)"/>
+  <!-- Inset Exclamation Mark -->
+  <rect x="59" y="44" width="10" height="32" rx="5" fill="#120B02"/>
+  <circle cx="64" cy="92" r="6" fill="#120B02"/>
+</svg>

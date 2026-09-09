@@ -22,6 +22,14 @@ export default defineConfig({
       },
     },
   ],
+  // The WalletConnect SDK (and some of its transitive deps) references Node
+  // globals during module evaluation. MV3 service workers have no `process`
+  // or bare `global`, so substitute safe equivalents at build time. Without
+  // these the dynamically-loaded WC chunk would throw once it is used.
+  define: {
+    global: 'globalThis',
+    'process.env.NODE_ENV': JSON.stringify('production'),
+  },
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),

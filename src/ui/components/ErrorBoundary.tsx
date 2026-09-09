@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react';
+import { Icon, type IconName } from '@/ui/components/Icon';
 import { t } from '@/i18n';
 import { Button } from '@/ui/components/Button';
 
@@ -62,7 +63,7 @@ export function ErrorState({
   return (
     <div className="flex min-h-[600px] w-[400px] flex-col items-center justify-center gap-4 p-4">
       <div className="flex h-12 w-12 items-center justify-center rounded-full bg-error/20">
-        <span className="text-xl">⚠️</span>
+        <Icon name="warning" className="h-6 w-6" />
       </div>
       <h2 className="font-display text-base font-semibold text-content-primary">{title}</h2>
       <p className="font-body text-sm text-content-secondary text-center max-w-xs">{message}</p>
@@ -79,12 +80,12 @@ export function ErrorState({
  * Empty state shown when a list or view has no data.
  */
 export function EmptyState({
-  icon = '📭',
+  icon = 'empty',
   title,
   message,
   action,
 }: {
-  icon?: string;
+  icon?: IconName;
   title: string;
   message: string;
   action?: { label: string; onClick: () => void };
@@ -92,7 +93,7 @@ export function EmptyState({
   return (
     <div className="flex flex-col items-center justify-center gap-3 py-8">
       <div className="flex h-10 w-10 items-center justify-center rounded-full bg-surface-700">
-        <span className="text-base">{icon}</span>
+        <Icon name={icon} className="h-5 w-5" />
       </div>
       <h3 className="font-display text-sm font-semibold text-content-primary">{title}</h3>
       <p className="font-body text-xs text-content-tertiary text-center max-w-[260px]">{message}</p>

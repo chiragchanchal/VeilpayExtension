@@ -217,7 +217,7 @@ Copy `.env.example` to `.env.local` (not committed). Vite exposes only `VITE_`-p
 cp .env.example .env.local
 ```
 
-The only variable the current build reads is `VITE_INDEXER_URL` (the transaction-history backend). The upstream Veilpay app repo (github.com/Veilpayapp/VEILPAY-APP) is an Expo mobile app that uses `EXPO_PUBLIC_*`; this browser extension uses `VITE_*` instead. RPC endpoints are pinned in the manifest (testnet-only), so no RPC env is needed until Phase 5 mainnet work.
+No environment variables are required. Transaction history is read directly from the testnet chains (Stellar Horizon, Solana devnet, EVM Sepolia) via the host permissions in the manifest; the chain fetchers live in `src/core/chains/{stellar,solana,evm}/history.ts` and are dispatched by `src/core/chains/indexer-service.ts`. RPC endpoints are pinned in the manifest as host permissions (testnet-only), so no RPC env is needed until Phase 5 mainnet work.
 
 ## Troubleshooting
 

@@ -74,7 +74,7 @@ risk-register item is resolved. Consider a remote/backup.
 - noble-curves 1.9: signature recovery needs `.addRecoveryBit(rec)` and `point.toRawBytes(false)` (not `toBytes`); `secp256k1.verify` only parses the bare 64-byte compact hex (no `0x`, no `v` byte).
 - Nonce LRU is module-level state; challenge tests clear it in `beforeEach`.
 - Spending is recorded at signing time; two racing auto-approvals could slightly overshoot the window cap (known limitation; a serialized operation queue in S5b fixes it).
-- `import.meta.env.VITE_INDEXER_URL` must be set at build time for indexer/tx-history.
+- Tx history is read directly from the chains (per-chain `history.ts` fetchers), NOT from a backend. The old `VITE_INDEXER_URL` backend contract (`/api/v1/indexer/tx`) is not served by any deployed backend; chain modules under `src/core/chains/{stellar,solana,evm}/history.ts` fetch Horizon / Solana devnet / EVM RPC and are dispatched by `indexer-service.ts`.
 - The `remember` plugin's autonomous saves have been flaky; this file is the manual checkpoint.
 
 ## S5c — PIN-gated grant creation

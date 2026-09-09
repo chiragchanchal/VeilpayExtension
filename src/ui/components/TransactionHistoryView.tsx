@@ -156,7 +156,6 @@ export function TransactionHistoryView() {
 
       {filtered.length === 0 ? (
         <EmptyState
-          icon="📭"
           title="No transactions"
           message="No transactions found for the selected filter."
         />

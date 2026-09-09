@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { ed25519 } from '@noble/curves/ed25519';
+import { sha256 } from '@noble/hashes/sha256';
 import {
   encodeStellarAddress,
   signStellarPayment,
@@ -33,6 +35,44 @@ describe('Stellar transfer serialization', () => {
     expect(() => atob(result.raw)).not.toThrow();
     expect(result.from).toBe(SOURCE_ADDRESS);
     expect(result.signingHash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('signs over the canonical network signature base (regression: tx_bad_auth)', () => {
+    // Stellar's signing hash is sha256(networkId || taggedTransaction), NOT
+    // sha256(txXdr). Signing the bare transaction hash makes Horizon reject the
+    // signature with tx_bad_auth even though the XDR is valid.
+    //
+    // Use a `from` derived from the SAME key that signs (as the background
+    // does), so the signature must validate against the source public key.
+    const publicKey = ed25519.getPublicKey(PRIVATE_KEY);
+    const fromAddress = encodeStellarAddress(publicKey);
+    const result = signStellarPayment({
+      from: fromAddress,
+      to: DEST_ADDRESS,
+      amount: 100_000_000n,
+      sequence: 120n,
+      fee: 100,
+    }, PRIVATE_KEY);
+
+    // Envelope layout: [uint32 2 (envelope disc)][txXdr]
+    //   [uint32 1 (sig count)][hint 4][opaque: uint32 64 + 64 bytes]
+    const envelope = new Uint8Array(atob(result.raw).split('').map((c) => c.charCodeAt(0)));
+    const txLen = envelope.length - 4 - (4 + 4 + 4 + 64);
+    const txXdr = envelope.slice(4, 4 + txLen);
+    const sig = envelope.slice(4 + txLen + 12, 4 + txLen + 12 + 64);
+    const signingHashBytes = Uint8Array.from(
+      result.signingHash.match(/.{2}/g)!.map((h) => parseInt(h, 16)),
+    );
+
+    // 1) The embedded signature verifies against the reported signing hash and
+    //    the signing key's public key — i.e. it is a valid Stellar auth.
+    expect(ed25519.verify(sig, signingHashBytes, publicKey)).toBe(true);
+    // 2) The signing hash includes the network-ID prefix: it is NOT the bare
+    //    SHA-256 of the transaction XDR (the pre-fix bug that caused tx_bad_auth).
+    const bareTxHash = Array.from(sha256(txXdr)).map((b) => b.toString(16).padStart(2, '0')).join('');
+    expect(result.signingHash).not.toBe(bareTxHash);
+    // 3) The canonical form is reproducible: signing the same inputs twice
+    //    yields the same network hash (checked already by the determinism test).
   });
 
   it('produces a deterministic output for the same inputs', () => {
@@ -101,8 +141,9 @@ describe('Stellar transfer serialization', () => {
     // fee uint32 = 100 follows the source account.
     expect(raw.slice(40, 44)).toEqual(new Uint8Array([0, 0, 0, 100]));
 
-    // seqNum int64 = 120 follows the fee (big-endian; last byte is 120).
-    expect(raw.slice(44, 52)).toEqual(new Uint8Array([0, 0, 0, 0, 0, 0, 0, 120]));
+    // seqNum int64 = 121 follows the fee (big-endian): the builder bumps
+    // Horizon's current sequence (120) by 1, which Horizon requires.
+    expect(raw.slice(44, 52)).toEqual(new Uint8Array([0, 0, 0, 0, 0, 0, 0, 121]));
 
     // Modern Preconditions union: PRECOND_NONE = uint32 0 (4 bytes).
     expect(raw.slice(52, 56)).toEqual(new Uint8Array(4));
@@ -130,6 +171,24 @@ describe('Stellar transfer serialization', () => {
     expect(raw.length).toBe(sigStart + 64);
   });
 
+  it('encodes a 1 XLM payment as 10000000 stroops (int64), not a decimal string', () => {
+    // 1 XLM = 10^7 stroops. The protocol wire format is an int64 stroop amount,
+    // NOT the "1.0000000" decimal string stellar-sdk's Operation.payment uses.
+    const result = signStellarPayment({
+      from: SOURCE_ADDRESS,
+      to: DEST_ADDRESS,
+      amount: 10_000_000n, // 1 XLM
+      sequence: 120n,
+      fee: 100,
+    }, PRIVATE_KEY);
+
+    const raw = Uint8Array.from(atob(result.raw), (c) => c.charCodeAt(0));
+    // For a native asset, the amount int64 sits at bytes 112-120 (after the
+    // destination AccountID at 72-108 and the 4-byte native Asset union at
+    // 108-112). Assert the exact stroop value, big-endian.
+    expect(raw.slice(112, 120)).toEqual(new Uint8Array([0, 0, 0, 0, 0, 0x98, 0x96, 0x80]));
+  });
+
   it('rejects an invalid private key length', () => {
     expect(() => signStellarPayment({
       from: SOURCE_ADDRESS,
@@ -148,5 +207,51 @@ describe('Stellar transfer serialization', () => {
       sequence: 1n,
       fee: 100,
     }, PRIVATE_KEY)).toThrow();
+  });
+
+  it('encodes a short issued asset code as credit_alphanum4 (type 1)', () => {
+    const issuer = encodeStellarAddress(new Uint8Array(32).fill(0x0c));
+    const result = signStellarPayment({
+      from: SOURCE_ADDRESS,
+      to: DEST_ADDRESS,
+      amount: 1_000_000n,
+      asset: { type: 'issued', code: 'USDC', issuer },
+      sequence: 120n,
+      fee: 100,
+    }, PRIVATE_KEY);
+
+    expect(() => atob(result.raw)).not.toThrow();
+    expect(result.from).toBe(SOURCE_ADDRESS);
+
+    const raw = Uint8Array.from(atob(result.raw), (c) => c.charCodeAt(0));
+    // Asset union sits right after the destination AccountID key. In the native
+    // case destination key is an ED25519 AccountID: disc (72-76) + 32-byte key
+    // (76-108), so the Asset union starts at 108.
+    expect(raw.slice(108, 112)).toEqual(new Uint8Array([0, 0, 0, 1])); // ASSET_TYPE_CREDIT_ALPHANUM4
+    // 4-byte asset code "USDC" follows the type discriminant.
+    expect(raw.slice(112, 116)).toEqual(new Uint8Array([0x55, 0x53, 0x44, 0x43]));
+    // Issuer AccountID = ED25519 discriminant (4 zero bytes) + 32-byte key.
+    expect(raw.slice(116, 120)).toEqual(new Uint8Array(4));
+    expect(raw.slice(120, 152)).toEqual(new Uint8Array(32).fill(0x0c));
+  });
+
+  it('encodes a 12-char code as credit_alphanum12 (type 2)', () => {
+    const issuer = encodeStellarAddress(new Uint8Array(32).fill(0x0d));
+    const result = signStellarPayment({
+      from: SOURCE_ADDRESS,
+      to: DEST_ADDRESS,
+      amount: 1_000_000n,
+      asset: { type: 'issued', code: 'SPECIALTOKEN', issuer },
+      sequence: 120n,
+      fee: 100,
+    }, PRIVATE_KEY);
+
+    const raw = Uint8Array.from(atob(result.raw), (c) => c.charCodeAt(0));
+    expect(raw.slice(108, 112)).toEqual(new Uint8Array([0, 0, 0, 2])); // ASSET_TYPE_CREDIT_ALPHANUM12
+    // 12-byte code (NUL-padded) follows the type discriminant.
+    const code = Uint8Array.from('SPECIALTOKEN', (c) => c.charCodeAt(0));
+    expect(raw.slice(112, 124)).toEqual(code);
+    expect(raw.slice(124, 128)).toEqual(new Uint8Array(4)); // issuer ED25519 disc
+    expect(raw.slice(128, 160)).toEqual(new Uint8Array(32).fill(0x0d));
   });
 });

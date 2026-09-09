@@ -1,0 +1,14 @@
+<svg viewBox="0 0 128 128" width="128" height="128" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="vpSpinGold" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFE785"/>
+      <stop offset="50%" stop-color="#F5B82E"/>
+      <stop offset="100%" stop-color="#733800" stop-opacity="0.1"/>
+    </linearGradient>
+  </defs>
+  <!-- 270-degree Progress Ring -->
+  <path d="M 64 20 A 44 44 0 1 1 20 64" 
+        fill="none" stroke="url(#vpSpinGold)" stroke-width="12" stroke-linecap="round"/>
+  <!-- Pulse Pivot Sparkle -->
+  <circle cx="64" cy="20" r="6" fill="#FFF0A3"/>
+</svg>

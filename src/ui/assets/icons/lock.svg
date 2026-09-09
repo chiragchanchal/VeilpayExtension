@@ -1,0 +1,18 @@
+<svg viewBox="0 0 128 128" width="128" height="128" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="vpLockGold" x1="20%" y1="0%" x2="80%" y2="100%">
+      <stop offset="0%" stop-color="#FFE785"/>
+      <stop offset="40%" stop-color="#F5B82E"/>
+      <stop offset="80%" stop-color="#B86A08"/>
+      <stop offset="100%" stop-color="#6B3300"/>
+    </linearGradient>
+  </defs>
+  <!-- Shackle -->
+  <path d="M 40 54 L 40 36 C 40 22 50 14 64 14 C 78 14 88 22 88 36 L 88 54 L 76 54 L 76 36 C 76 28 70 24 64 24 C 58 24 52 28 52 36 L 52 54 Z" 
+        fill="url(#vpLockGold)"/>
+  <!-- Lock Body -->
+  <rect x="26" y="52" width="76" height="58" rx="16" fill="url(#vpLockGold)"/>
+  <!-- Shield Keyhole -->
+  <circle cx="64" cy="74" r="7" fill="#120B02"/>
+  <polygon points="61,76 67,76 69,92 59,92" fill="#120B02"/>
+</svg>

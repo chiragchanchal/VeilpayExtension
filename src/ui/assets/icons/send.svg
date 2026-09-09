@@ -1,0 +1,18 @@
+<svg viewBox="0 0 128 128" width="128" height="128" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="vpCoinGold" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFF0A3"/>
+      <stop offset="40%" stop-color="#F5B82E"/>
+      <stop offset="80%" stop-color="#C2730C"/>
+      <stop offset="100%" stop-color="#733800"/>
+    </linearGradient>
+  </defs>
+  <!-- Dynamic Transfer Arc Behind -->
+  <path d="M 14 74 C 14 40 40 18 74 18" fill="none" stroke="url(#vpCoinGold)" stroke-width="5" stroke-linecap="round"/>
+  <path d="M 114 54 C 114 88 88 110 54 110" fill="none" stroke="url(#vpCoinGold)" stroke-width="5" stroke-linecap="round"/>
+  <!-- Central Minted Token -->
+  <circle cx="64" cy="64" r="36" fill="url(#vpCoinGold)"/>
+  <circle cx="64" cy="64" r="30" fill="none" stroke="#FFF0A3" stroke-width="2"/>
+  <!-- Embossed V Symbol -->
+  <path d="M 52 50 L 64 74 L 76 50 L 84 50 L 68 80 L 60 80 L 44 50 Z" fill="#120B02"/>
+</svg>

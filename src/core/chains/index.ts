@@ -1,4 +1,10 @@
 import type { Chain } from '@/core/vault/key-derivation';
+import {
+  erc20BalanceOfCalldata,
+  erc20DecimalsCalldata,
+  decodeDecimals,
+  decodeUint256,
+} from './evm/erc20';
 
 /**
  * Chain service abstraction — thin HTTP wrappers around each chain's RPC.
@@ -42,6 +48,29 @@ export interface ChainService {
    * Solana has no per-account sequence and returns 0.
    */
   getSequence(address: string): Promise<bigint>;
+
+  /**
+   * Optional live base-fee read. Implemented by Stellar so the wallet
+   * auto-adjusts to network congestion; other chains fall back to `estimateGas`.
+   */
+  getBaseFee?(): Promise<bigint>;
+
+  /** EVM: decimal places of an ERC20 contract (from `decimals()`). */
+  erc20Decimals?(contract: string): Promise<number>;
+  /** EVM: raw (base-unit) balance of an ERC20 for an owner. */
+  erc20BalanceOf?(contract: string, owner: string): Promise<bigint>;
+  /** EVM: build `transfer(address,uint256)` calldata for an ERC20. */
+  erc20TransferData?(to: string, amount: bigint): Uint8Array;
+
+  /** Solana: decimal places of an SPL mint (from the mint account data). */
+  mintDecimals?(mint: string): Promise<number>;
+  /** Solana: raw (base-unit) SPL token balance for an owner + mint. */
+  tokenBalance?(owner: string, mint: string): Promise<bigint>;
+  /** Solana: the owner's SPL token account address for a mint (or null). */
+  tokenAccount?(owner: string, mint: string): Promise<string | null>;
+
+  /** Stellar: raw (stroop) balance of an issued asset. */
+  getAssetBalance?(address: string, code: string, issuer: string): Promise<bigint>;
 }
 
 /**
@@ -71,22 +100,42 @@ export function createSolanaService(
   return new SolanaService(rpcUrl);
 }
 
-/** Thin HTTP wrapper for Stellar Horizon. */
+/**
+ * Thin HTTP wrapper for Stellar Horizon.
+ * Accepts a single URL or an ordered list (custom mirror first, official as
+ * fallback). Defaults to the official testnet endpoint.
+ */
 export function createStellarService(
-  horizonUrl: string = TESTNET_ENDPOINTS.stellar,
+  horizonUrlOrEndpoints: string | string[] = TESTNET_ENDPOINTS.stellar,
 ): ChainService {
-  return new StellarService(horizonUrl);
+  const endpoints =
+    typeof horizonUrlOrEndpoints === 'string'
+      ? horizonUrlOrEndpoints.length > 0
+        ? [horizonUrlOrEndpoints]
+        : []
+      : horizonUrlOrEndpoints;
+  return new StellarService(endpoints);
 }
 
-/** Dispatches to the right service for a chain. */
-export function createChainService(chain: Chain, rpcUrl?: string): ChainService {
+/** Dispatches to the right service for a chain.
+ * Stellar accepts an endpoint list (custom mirror first, official fallback);
+ * EVM and Solana take a single RPC URL and keep their own internal fallbacks.
+ */
+export function createChainService(
+  chain: Chain,
+  rpcUrlOrEndpoints?: string | string[],
+): ChainService {
   switch (chain) {
-    case 'evm':
-      return createEvmService(rpcUrl);
-    case 'solana':
-      return createSolanaService(rpcUrl);
+    case 'evm': {
+      const url = typeof rpcUrlOrEndpoints === 'string' ? rpcUrlOrEndpoints : rpcUrlOrEndpoints?.[0];
+      return createEvmService(url);
+    }
+    case 'solana': {
+      const url = typeof rpcUrlOrEndpoints === 'string' ? rpcUrlOrEndpoints : rpcUrlOrEndpoints?.[0];
+      return createSolanaService(url ?? TESTNET_ENDPOINTS.solana);
+    }
     case 'stellar':
-      return createStellarService(rpcUrl);
+      return createStellarService(rpcUrlOrEndpoints);
   }
 }
 
@@ -143,6 +192,30 @@ class EvmService implements ChainService {
     return BigInt(response);
   }
 
+  /** Reads ERC20 `decimals()` for a contract via `eth_call`. */
+  async erc20Decimals(contract: string): Promise<number> {
+    const result = await this.ethCall(contract, erc20DecimalsCalldata());
+    return decodeDecimals(result);
+  }
+
+  /** Reads ERC20 `balanceOf(owner)` for a contract via `eth_call`. */
+  async erc20BalanceOf(contract: string, owner: string): Promise<bigint> {
+    const result = await this.ethCall(contract, erc20BalanceOfCalldata(owner));
+    return decodeUint256(result);
+  }
+
+  /** Runs a read-only `eth_call` against a contract and returns the raw hex result. */
+  private async ethCall(to: string, data: string): Promise<string> {
+    const result = await this.call('eth_call', [
+      { to, data },
+      'latest',
+    ]);
+    if (typeof result !== 'string') {
+      throw new Error(`eth_call returned non-string: ${typeof result}`);
+    }
+    return result;
+  }
+
   private async call(method: string, params: unknown[]): Promise<unknown> {
     const endpoints =
       this.rpcUrl !== undefined && this.rpcUrl.length > 0
@@ -197,6 +270,33 @@ class EvmService implements ChainService {
 // ---------------------------------------------------------------------------
 // Solana
 // ---------------------------------------------------------------------------
+
+/** Normalizes a Solana `getAccountInfo.data` field into a Uint8Array.
+ *  Solana returns base64 either as a bare string content or as a
+ *  `[content, "base64"]` pair depending on the request encoding. */
+function decodeBase64AccountData(data: unknown): Uint8Array {
+  let content: string | undefined;
+  if (typeof data === 'string') {
+    content = data;
+  } else if (Array.isArray(data) && typeof data[0] === 'string') {
+    content = data[0];
+  }
+  if (content === undefined) {
+    throw new Error('Solana account has no base64 data.');
+  }
+  const clean = content.replace(/\s+/g, '');
+  if (clean === '') return new Uint8Array(0);
+  if (typeof atob === 'function') {
+    const binary = atob(clean);
+    const out = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) {
+      out[i] = binary.charCodeAt(i);
+    }
+    return out;
+  }
+  // Node fallback (tests run without a browser `atob`).
+  return Buffer.from(clean, 'base64');
+}
 
 class SolanaService implements ChainService {
   readonly chain = 'solana';
@@ -255,6 +355,103 @@ class SolanaService implements ChainService {
     return BigInt(0);
   }
 
+  /**
+   * Reads the `decimals` field of an SPL token mint: the single byte at offset
+   * 44 (0x2c) of the mint's account `data`. Returns the base-64 `data` payload
+   * after validation so callers can also parse raw balances when needed.
+   */
+  async mintDecimals(mint: string): Promise<number> {
+    const raw = await this.getAccountInfoData(mint);
+    const data = decodeBase64AccountData(raw);
+    if (data.length <= 44) {
+      throw new Error(`SPL mint account data too short: ${data.length} bytes.`);
+    }
+    return data[44] ?? 0;
+  }
+
+  /**
+   * Returns the SPL token balance (raw base units, as a bigint) held by `owner`
+   * for `mint`, by reading the owner's token account via `getTokenAccountsByOwner`
+   * (config-based) and summing the `tokenAmount.amount` fields that match `mint`.
+   * Returns 0n when the owner has no account for that mint.
+   */
+  async tokenBalance(owner: string, mint: string): Promise<bigint> {
+    const response = await this.call('getTokenAccountsByOwner', [
+      owner,
+      { mint },
+      { encoding: 'jsonParsed' },
+    ]);
+    if (typeof response !== 'object' || response === null || !('value' in response)) {
+      throw new Error(
+        `getTokenAccountsByOwner returned unexpected shape: ${JSON.stringify(response)}`,
+      );
+    }
+    const value = (response as { value: unknown }).value;
+    if (!Array.isArray(value)) {
+      throw new Error('getTokenAccountsByOwner value is not an array.');
+    }
+    let total = 0n;
+    for (const entry of value) {
+      if (typeof entry !== 'object' || entry === null) continue;
+      const info = (entry as { account?: unknown }).account;
+      if (typeof info !== 'object' || info === null) continue;
+      const data = (info as { data?: unknown }).data;
+      if (typeof data !== 'object' || data === null) continue;
+      const parsed = (data as { parsed?: unknown }).parsed;
+      if (typeof parsed !== 'object' || parsed === null) continue;
+      const tokenAmount = (parsed as { info?: { tokenAmount?: { amount?: string } } }).info
+        ?.tokenAmount;
+      const amountStr = tokenAmount?.amount;
+      if (amountStr === undefined) continue;
+      try {
+        total += BigInt(amountStr);
+      } catch {
+        // Ignore malformed amounts rather than failing the whole read.
+      }
+    }
+    return total;
+  }
+
+  /** The base58 address of the owner's token account for `mint` (or null when none exists). */
+  async tokenAccount(owner: string, mint: string): Promise<string | null> {
+    const response = await this.call('getTokenAccountsByOwner', [
+      owner,
+      { mint },
+      { encoding: 'jsonParsed' },
+    ]);
+    if (typeof response !== 'object' || response === null || !('value' in response)) {
+      throw new Error(
+        `getTokenAccountsByOwner returned unexpected shape: ${JSON.stringify(response)}`,
+      );
+    }
+    const value = (response as { value: unknown }).value;
+    if (!Array.isArray(value)) {
+      throw new Error('getTokenAccountsByOwner value is not an array.');
+    }
+    const first = value[0];
+    if (typeof first !== 'object' || first === null) return null;
+    const pubkey = (first as { pubkey?: string }).pubkey;
+    return typeof pubkey === 'string' && pubkey.length > 0 ? pubkey : null;
+  }
+
+  /** Raw `getAccountInfo` `data` field for an address (throws if absent). */
+  private async getAccountInfoData(address: string): Promise<unknown> {
+    const response = await this.call('getAccountInfo', [
+      address,
+      { encoding: 'base64' },
+    ]);
+    if (typeof response !== 'object' || response === null || !('value' in response)) {
+      throw new Error(
+        `getAccountInfo returned unexpected shape: ${JSON.stringify(response)}`,
+      );
+    }
+    const value = (response as { value: unknown }).value;
+    if (typeof value !== 'object' || value === null || !('data' in value)) {
+      return null;
+    }
+    return (value as { data?: unknown }).data;
+  }
+
   private async call(method: string, params: unknown[]): Promise<unknown> {
     const response = await fetch(this.rpcUrl, {
       method: 'POST',
@@ -298,10 +495,47 @@ class SolanaService implements ChainService {
 // Stellar
 // ---------------------------------------------------------------------------
 
+/**
+ * Parses a Horizon decimal balance string ("9999.9999900") into stroops
+ * (10^7 per whole XLM) using exact integer string math — no floating point.
+ * Horizon reports exactly 7 decimal places; any longer fraction is truncated.
+ */
+function decimalToStroops(decimal: string): bigint {
+  const negative = decimal.startsWith('-');
+  const abs = negative ? decimal.slice(1) : decimal;
+  const parts = abs.split('.');
+  const wholeRaw = parts[0] ?? '';
+  const fracRaw = parts[1] ?? '';
+  const whole = wholeRaw === '' ? '0' : wholeRaw;
+  // Pad to 7dp on the right, then truncate anything beyond 7dp.
+  const frac7 = (fracRaw + '0000000').slice(0, 7);
+  const value = BigInt(whole) * 10_000_000n + BigInt(frac7);
+  return negative ? -value : value;
+}
+
 class StellarService implements ChainService {
   readonly chain = 'stellar';
 
-  constructor(private horizonUrl: string) {}
+  /** Default reliable Horizon testnet endpoint. */
+  private static DEFAULT_ENDPOINT = 'https://horizon-testnet.stellar.org';
+  private endpointIndex = 0;
+
+  /**
+   * @param endpoints - Ordered Horizon endpoints. If none are given, the
+   *   official testnet endpoint is used. A custom first endpoint (from a user's
+   *   network config) is tried first, then the official one as a fallback, so
+   *   a stale or rate-limited custom gateway never bricks sending.
+   */
+  constructor(private endpoints: string[] = [StellarService.DEFAULT_ENDPOINT]) {
+    const deduped: string[] = [];
+    for (const e of endpoints) {
+      if (e.length > 0 && !deduped.includes(e)) deduped.push(e);
+    }
+    if (!deduped.includes(StellarService.DEFAULT_ENDPOINT)) {
+      deduped.push(StellarService.DEFAULT_ENDPOINT);
+    }
+    this.endpoints = deduped;
+  }
 
   async isFunded(address: string): Promise<boolean> {
     return (await this.fetchAccount(address)) !== 'notFunded';
@@ -315,8 +549,16 @@ class StellarService implements ChainService {
   private async fetchAccount(address: string): Promise<
     { balances: unknown[]; sequence: string } | 'notFunded'
   > {
-    const response = await fetch(`${this.horizonUrl}/accounts/${address}`);
-    if (response.status === 404) return 'notFunded';
+    const result = await this.horizonFetch(`/accounts/${address}`);
+
+    // A 404 from the official endpoint is authoritative: the account has never
+    // been funded (Stellar accounts only exist once created). A 404 from a
+    // custom mirror only means "unknown to this mirror"; `horizonFetch` treats
+    // that as a failed endpoint and rotates to the official one instead.
+    if (result === 'notFound') {
+      return 'notFunded';
+    }
+    const response = result;
     if (!response.ok) {
       throw new Error(`Horizon /accounts/${address} failed: HTTP ${response.status}`);
     }
@@ -363,13 +605,82 @@ class StellarService implements ChainService {
       throw new Error(`Native balance is not a string: ${typeof balance}`);
     }
 
-    // Stellar balance is in stroops (1 XLM = 10^7 stroops), represented as a string.
-    return BigInt(Math.round(parseFloat(balance) * 1e7));
+    // Stellar balance is in stroops (1 XLM = 10^7 stroops). Convert via exact
+    // integer string math — never floating point, which can round large balances.
+    return decimalToStroops(balance);
+  }
+
+  /**
+   * Fetches the LiquidAsset balance for an issued token (code + issuer).
+   * Returns 0n if the account holds none. Used only for display validation;
+   * an insufficient asset balance is ultimately rejected on-chain at submit.
+   */
+  async getAssetBalance(address: string, code: string, issuer: string): Promise<bigint> {
+    const account = await this.fetchAccount(address);
+    if (account === 'notFunded') return 0n;
+
+    for (const b of account.balances) {
+      if (
+        typeof b === 'object' &&
+        b !== null &&
+        'asset_type' in b &&
+        'asset_code' in b &&
+        'asset_issuer' in b &&
+        'balance' in b
+      ) {
+        const rec = b as {
+          asset_type: string;
+          asset_code: string;
+          asset_issuer: string;
+          balance: string;
+        };
+        if (
+          rec.asset_type !== 'native' &&
+          rec.asset_code === code &&
+          rec.asset_issuer === issuer
+        ) {
+          return decimalToStroops(rec.balance);
+        }
+      }
+    }
+    return 0n;
+  }
+
+  /**
+   * Returns the network's current base fee in stroops, read live from Horizon
+   * so the wallet auto-adjusts instead of hardcoding 100. Falls back to 100
+   * stroops if `fee_stats` is unavailable (e.g. an older mirror).
+   */
+  async getBaseFee(): Promise<bigint> {
+    try {
+      const result = await this.horizonFetch('/fee_stats');
+      if (result === 'notFound') {
+        throw new Error('Horizon /fee_stats returned 404.');
+      }
+      const response = result;
+      if (!response.ok) {
+        throw new Error(`Horizon /fee_stats failed: HTTP ${response.status}`);
+      }
+      const data = (await response.json()) as unknown;
+      if (typeof data !== 'object' || data === null) {
+        throw new Error('Horizon /fee_stats returned unexpected shape.');
+      }
+      const record = data as { last_ledger_base_fee?: unknown };
+      const raw = record.last_ledger_base_fee;
+      if (typeof raw !== 'string' || !/^\d+$/.test(raw)) {
+        throw new Error('Horizon /fee_stats has no last_ledger_base_fee.');
+      }
+      const fee = BigInt(raw);
+      return fee >= 100n ? fee : 100n;
+    } catch {
+      // Stellar's minimum base fee is 100 stroops; use the safe floor.
+      return BigInt(100);
+    }
   }
 
   async estimateGas(): Promise<bigint> {
-    // Stellar fees are deterministic: 100 stroops per operation.
-    return BigInt(100);
+    // Auto-adjust: the base fee now reflects live network congestion.
+    return this.getBaseFee();
   }
 
   async sendTransaction(signedTx: unknown): Promise<string> {
@@ -377,25 +688,45 @@ class StellarService implements ChainService {
       throw new Error('Stellar transaction must be XDR (base64).');
     }
 
-    const response = await fetch(`${this.horizonUrl}/transactions`, {
+    const result = await this.horizonFetch('/transactions', {
       method: 'POST',
       body: new URLSearchParams({ tx: signedTx }),
     });
+    if (result === 'notFound') {
+      throw new Error('Horizon /transactions POST failed: HTTP 404.');
+    }
+    const response = result;
 
     if (!response.ok) {
-      // Horizon returns a JSON body with a human `detail` (e.g. tx_bad_seq).
-      // Surface it so a failed submit is diagnosable instead of a bare HTTP code.
+      // Horizon returns a JSON body with a human `detail` and an
+      // `extras.result_codes` object (the transaction code plus an operations
+      // array, e.g. op_underfunded / op_no_destination / op_malformed). Surface
+      // both so a failed submit is diagnosable instead of a bare HTTP code.
       let detail = '';
+      let resultCodes = '';
       try {
         const body = (await response.json()) as unknown;
         if (typeof body === 'object' && body !== null && 'detail' in body) {
           detail = String((body as { detail: unknown }).detail);
         }
+        const extras =
+          typeof body === 'object' && body !== null
+            ? (body as { extras?: unknown }).extras
+            : undefined;
+        const codes =
+          typeof extras === 'object' && extras !== null
+            ? (extras as { result_codes?: unknown }).result_codes
+            : undefined;
+        if (codes !== undefined) {
+          resultCodes = JSON.stringify(codes);
+        }
       } catch {
         // Body wasn't JSON; leave detail empty.
       }
       throw new Error(
-        `Horizon /transactions POST failed: HTTP ${response.status}${detail ? ` — ${detail}` : ''}`,
+        `Horizon /transactions POST failed: HTTP ${response.status}` +
+          `${detail ? ` — ${detail}` : ''}` +
+          `${resultCodes ? ` — result_codes: ${resultCodes}` : ''}`,
       );
     }
 
@@ -420,6 +751,72 @@ class StellarService implements ChainService {
     // the correct, honest failure for an unfunded address.
     if (account === 'notFunded') return 0n;
     return BigInt(account.sequence);
+  }
+
+  /**
+   * Fetches a Horizon path across the configured endpoints, rotating on
+   * failure. Uses a 15s timeout per call (the caller's message router has its
+   * own timeout).
+   *
+   * Returns `'notFound'` only when the *official* endpoint answers 404 on a
+   * GET — the authoritative "account never funded" signal. A 404 from a custom
+   * mirror is treated as a stale/unreliable endpoint and it rotates onward.
+   *
+   * POSTs (submit) are never retried once they have reached an endpoint that
+   * returns a 4xx: re-submitting a signed tx to another endpoint can double-
+   * spend. A POST that fails with a network error before any server response
+   * IS retried on the next endpoint.
+   */
+  private async horizonFetch(
+    path: string,
+    init?: { method?: string; body?: URLSearchParams },
+  ): Promise<Response | 'notFound'> {
+    const method = init?.method ?? 'GET';
+    let lastError: Error | null = null;
+
+    for (let i = 0; i < this.endpoints.length; i += 1) {
+      const idx = (this.endpointIndex + i) % this.endpoints.length;
+      const url = this.endpoints[idx];
+      if (url === undefined || url.length === 0) continue;
+
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 15_000);
+        let response: Response;
+        try {
+          const initBody = init?.body;
+          response = await fetch(`${url}${path}`, {
+            method,
+            signal: controller.signal,
+            ...(initBody !== undefined ? { body: initBody } : {}),
+          });
+        } finally {
+          clearTimeout(timer);
+        }
+
+        // A server-side rejection (4xx) is authoritative for a submit: surface
+        // it without retrying (double-spend risk).
+        if (method === 'POST' && response.status >= 400 && response.status < 500) {
+          return response;
+        }
+
+        if (response.ok) {
+          this.endpointIndex = idx;
+          return response;
+        }
+
+        // A GET 404 from the official endpoint is the never-funded signal.
+        if (method === 'GET' && response.status === 404 && url.includes('horizon-testnet.stellar.org')) {
+          return 'notFound';
+        }
+
+        // Any other non-2xx (or 404 from a custom mirror): rotate onward.
+        throw new Error(`Horizon ${path} failed: HTTP ${response.status}`);
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+      }
+    }
+    throw lastError ?? new Error(`Horizon ${path} failed on all endpoints.`);
   }
 }
 

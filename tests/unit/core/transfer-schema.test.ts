@@ -1,0 +1,185 @@
+import { describe, expect, it } from 'vitest';
+import { TxEstimateRequest, TxTransferRequest } from '@/core/messaging/protocol';
+
+// Schema-valid Stellar strkey shape: G + 55 of [A-Z2-7] (regex only; no checksum check here).
+const G = 'G' + 'A'.repeat(55);
+
+function envelope(payload: unknown) {
+  return {
+    id: '00000000-0000-4000-8000-000000000000',
+    source: 'popup',
+    v: 1,
+    kind: 'tx.transfer',
+    payload,
+  };
+}
+
+describe('transfer payload schema', () => {
+  it('accepts a whole-number amount', () => {
+    expect(TxTransferRequest.safeParse(envelope({
+      chain: 'evm', index: 0, to: '0xabc', amount: '1',
+    })).success).toBe(true);
+  });
+
+  it('accepts a fractional amount (human-readable native units)', () => {
+    const result = TxTransferRequest.safeParse(envelope({
+      chain: 'stellar', index: 0, to: G, amount: '0.5',
+    }));
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects a malformed amount', () => {
+    expect(TxTransferRequest.safeParse(envelope({
+      chain: 'evm', index: 0, to: '0xabc', amount: 'abc',
+    })).success).toBe(false);
+    expect(TxTransferRequest.safeParse(envelope({
+      chain: 'evm', index: 0, to: '0xabc', amount: '-1',
+    })).success).toBe(false);
+    // More than 30 fractional digits would risk overflowing uint256 base units.
+    expect(TxTransferRequest.safeParse(envelope({
+      chain: 'evm', index: 0, to: '0xabc', amount: '0.' + '9'.repeat(40),
+    })).success).toBe(false);
+  });
+
+  it('accepts a native Stellar asset', () => {
+    const result = TxTransferRequest.safeParse(envelope({
+      chain: 'stellar', index: 0, to: G,
+      amount: '1', asset: { type: 'native' },
+    }));
+    expect(result.success).toBe(true);
+  });
+
+  it('accepts an issued Stellar asset with a valid code and issuer', () => {
+    const result = TxTransferRequest.safeParse(envelope({
+      chain: 'stellar', index: 0, to: G,
+      amount: '12.5',
+      asset: { type: 'issued', code: 'USDC', issuer: G },
+    }));
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects an issued asset with an oversized code or malformed issuer', () => {
+    expect(TxTransferRequest.safeParse(envelope({
+      chain: 'stellar', index: 0, to: G,
+      amount: '1', asset: { type: 'issued', code: 'TOOLONGCODE123', issuer: G },
+    })).success).toBe(false);
+    expect(TxTransferRequest.safeParse(envelope({
+      chain: 'stellar', index: 0, to: G,
+      amount: '1', asset: { type: 'issued', code: 'USDC', issuer: 'not-an-address' },
+    })).success).toBe(false);
+  });
+
+  it('requires an amount (no base-unit field anymore)', () => {
+    const result = TxEstimateRequest.safeParse(envelope({
+      chain: 'solana', index: 0, to: 'abc',
+    }) as Record<string, unknown>);
+    expect(result.success).toBe(false);
+  });
+});
+
+describe('TokenInput token selection', () => {
+  const EVM = '0x' + 'ab'.repeat(20);
+  const SPL = '9' + 'a'.repeat(31);
+
+  it('accepts a native token (default) across every chain', () => {
+    for (const chain of ['evm', 'solana', 'stellar'] as const) {
+      const result = TxTransferRequest.safeParse(envelope({
+        chain, index: 0, to: 'recipient', amount: '1', token: { kind: 'native' },
+      }));
+      expect(result.success).toBe(true);
+    }
+  });
+
+  it('accepts an ERC20 token on EVM', () => {
+    const result = TxTransferRequest.safeParse(envelope({
+      chain: 'evm', index: 0, to: '0xrecipient', amount: '3.14', token: { kind: 'erc20', address: EVM },
+    }));
+    expect(result.success).toBe(true);
+  });
+
+  it('accepts an SPL token on Solana', () => {
+    const result = TxTransferRequest.safeParse(envelope({
+      chain: 'solana', index: 0, to: 'recipient', amount: '1.5', token: { kind: 'spl', mint: SPL },
+    }));
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects an ERC20 with a malformed contract address', () => {
+    expect(TxTransferRequest.safeParse(envelope({
+      chain: 'evm', index: 0, to: 'r', amount: '1', token: { kind: 'erc20', address: '0x123' },
+    })).success).toBe(false);
+  });
+
+  it('rejects an unknown token kind', () => {
+    expect(TxTransferRequest.safeParse(envelope({
+      chain: 'evm', index: 0, to: 'r', amount: '1', token: { kind: 'bitcoin' },
+    })).success).toBe(false);
+  });
+
+  it('rejects an SPL mint that is too short', () => {
+    expect(TxTransferRequest.safeParse(envelope({
+      chain: 'solana', index: 0, to: 'r', amount: '1', token: { kind: 'spl', mint: 'abc' },
+    })).success).toBe(false);
+  });
+});
+
+describe('tx response schema (token fields + error code)', () => {
+  it('accepts the new tx.estimate response fields', async () => {
+    const { Response } = await import('@/core/messaging/protocol');
+    const ok = Response.safeParse({
+      id: '00000000-0000-4000-8000-000000000000',
+      ok: true,
+      data: {
+        chain: 'evm',
+        from: '0x' + 'ab'.repeat(20),
+        feeNative: '21000000000',
+        gasLimit: '21000',
+        decimals: 6,
+        spendableBalance: '100000000',
+        symbol: 'USDC',
+      },
+    } as unknown);
+    expect(ok.success).toBe(true);
+  });
+
+  it('accepts a response missing the optional symbol', async () => {
+    const { Response } = await import('@/core/messaging/protocol');
+    const ok = Response.safeParse({
+      id: '00000000-0000-4000-8000-000000000000',
+      ok: true,
+      data: {
+        chain: 'solana',
+        from: 'addr',
+        feeNative: '5000',
+        gasLimit: '1',
+        decimals: 9,
+        spendableBalance: '0',
+      },
+    } as unknown);
+    expect(ok.success).toBe(true);
+  });
+
+  it('accepts INSUFFICIENT_BALANCE as a transportable error code', async () => {
+    const { Response } = await import('@/core/messaging/protocol');
+    const err = Response.safeParse({
+      id: '00000000-0000-4000-8000-000000000000',
+      ok: false,
+      error: { code: 'INSUFFICIENT_BALANCE', message: 'Insufficient token balance.' },
+    });
+    expect(err.success).toBe(true);
+  });
+
+  // Response `data` is intentionally `z.unknown()` on the wire — the shape of
+  // each response kind is enforced at compile time by `ResponseData`/HandlerMap,
+  // not by a runtime schema. This documents that the new fields are part of the
+  // typed contract (see `ResponseData['tx.estimate']`).
+  it('treats the response body as opaque JSON on the wire', async () => {
+    const { Response } = await import('@/core/messaging/protocol');
+    const ok = Response.safeParse({
+      id: '00000000-0000-4000-8000-000000000000',
+      ok: true,
+      data: { any: ['body', 'is', 'allowed'] },
+    });
+    expect(ok.success).toBe(true);
+  });
+});

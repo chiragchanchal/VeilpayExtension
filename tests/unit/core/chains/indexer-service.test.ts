@@ -1,10 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openStorageDatabase, resetConnectionForTests } from '@/core/vault/storage';
-import {
-  fetchTransactionHistory,
-  fetchTransactionHistoryCached,
-  type IndexerTx,
-} from '@/core/chains/indexer-service';
+import { fetchTransactionHistoryCached } from '@/core/chains/indexer-service';
+import type { IndexerTx } from '@/core/chains/indexer-service';
+
+/** Mock the per-chain native fetchers; the service dispatches to them. */
+const fetchEvmHistory = vi.hoisted(() => vi.fn());
+
+vi.mock('@/core/chains/evm/history', () => ({
+  fetchEvmHistory,
+}));
+vi.mock('@/core/chains/solana/history', () => ({ fetchSolanaHistory: vi.fn() }));
+vi.mock('@/core/chains/stellar/history', () => ({ fetchStellarHistory: vi.fn() }));
 
 const ADDR = '0x0000000000000000000000000000000000000001';
 
@@ -22,31 +28,18 @@ const TXS: IndexerTx[] = [
   },
 ];
 
-function mockFetchOk(): void {
-  vi.stubGlobal(
-    'fetch',
-    vi.fn(async () =>
-      new Response(JSON.stringify({ transactions: TXS, nextCursor: null }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }),
-    ),
-  );
+function mockEvmOk(): void {
+  fetchEvmHistory.mockResolvedValue({ transactions: TXS, nextCursor: null });
 }
 
-function mockFetchFail(): void {
-  vi.stubGlobal(
-    'fetch',
-    vi.fn(async () => {
-      throw new Error('network down');
-    }),
-  );
+function mockEvmFail(): void {
+  fetchEvmHistory.mockRejectedValue(new Error('network down'));
 }
 
 beforeEach(() => {
   resetConnectionForTests();
   indexedDB.deleteDatabase('veilpay');
-  vi.stubEnv('VITE_INDEXER_URL', 'http://indexer.test');
+  fetchEvmHistory.mockReset();
 });
 
 afterEach(() => {
@@ -54,9 +47,10 @@ afterEach(() => {
 });
 
 describe('indexer-service cache policy', () => {
-  it('persists validated transactions through the repository on a remote fetch', async () => {
-    mockFetchOk();
-    const result = await fetchTransactionHistory('evm', ADDR, 5);
+  it('persists validated transactions through the repository on a direct fetch', async () => {
+    mockEvmOk();
+    const result = await fetchTransactionHistoryCached('evm', ADDR, 5);
+    expect(result.source).toBe('remote');
     expect(result.transactions).toHaveLength(1);
 
     const db = await openStorageDatabase();
@@ -66,42 +60,37 @@ describe('indexer-service cache policy', () => {
     expect(records[0]).toMatchObject({ hash: '0xabc', chain: 'evm', status: 'confirmed' });
   });
 
-  it('falls back to the repository cache when the backend is unreachable', async () => {
-    // Prime the cache with a successful remote fetch, then take the backend down.
-    mockFetchOk();
-    await fetchTransactionHistory('evm', ADDR, 5);
-    vi.unstubAllGlobals();
+  it('falls back to the repository cache when the chain is unreachable', async () => {
+    // Prime the cache with a successful direct fetch, then take the chain down.
+    mockEvmOk();
+    await fetchTransactionHistoryCached('evm', ADDR, 5);
+    mockEvmFail();
 
-    mockFetchFail();
     const cached = await fetchTransactionHistoryCached('evm', ADDR, 5);
     expect(cached.source).toBe('cache');
     expect(cached.transactions[0]?.hash).toBe('0xabc');
   });
 
-  it('remote results win over the cache once the backend returns', async () => {
-    mockFetchOk();
-    await fetchTransactionHistory('evm', ADDR, 5);
+  it('direct results win over the cache once the chain is reachable', async () => {
+    mockEvmOk();
+    await fetchTransactionHistoryCached('evm', ADDR, 5);
 
-    vi.unstubAllGlobals();
-    mockFetchOk(); // backend is back
+    mockEvmFail();
+    await fetchTransactionHistoryCached('evm', ADDR, 5);
+
+    mockEvmOk(); // chain is back
     const result = await fetchTransactionHistoryCached('evm', ADDR, 5);
     expect(result.source).toBe('remote');
     expect(result.transactions).toHaveLength(1);
   });
 
-  it('treats a healthy-but-empty backend as authoritative remote, not cache', async () => {
+  it('treats a healthy-but-empty chain as authoritative remote, not cache', async () => {
     // Prime the cache first so the assertion is meaningful: even with valid
-    // cache rows, a backend that answers with zero transactions must win.
-    mockFetchOk();
-    await fetchTransactionHistory('evm', ADDR, 5);
-    vi.unstubAllGlobals();
+    // cache rows, a chain that answers with zero transactions must win.
+    mockEvmOk();
+    await fetchTransactionHistoryCached('evm', ADDR, 5);
+    fetchEvmHistory.mockResolvedValue({ transactions: [], nextCursor: null });
 
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () =>
-        new Response(JSON.stringify({ transactions: [], nextCursor: null }), { status: 200 }),
-      ),
-    );
     const result = await fetchTransactionHistoryCached('evm', ADDR, 5);
     expect(result.transactions).toHaveLength(0);
     expect(result.source).toBe('remote');

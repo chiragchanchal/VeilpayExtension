@@ -244,9 +244,9 @@ describe('popup unlocked dashboard', () => {
     expect(screen.getByText('Assets')).toBeInTheDocument();
     expect(screen.getByText(/Recent Transactions/)).toBeInTheDocument();
 
-    // Send/Receive buttons exist for each account.
-    expect(screen.getAllByRole('button', { name: 'Send' }).length).toBe(3);
-    expect(screen.getAllByRole('button', { name: 'Receive' }).length).toBe(3);
+    // Send/Receive buttons: one quick-action button plus one per asset row.
+    expect(screen.getAllByRole('button', { name: 'Send' }).length).toBe(4);
+    expect(screen.getAllByRole('button', { name: 'Receive' }).length).toBe(4);
   });
 
   it('opens the send form for an account', async () => {
@@ -260,11 +260,86 @@ describe('popup unlocked dashboard', () => {
 
     render(<App />);
 
-    await user.click(await screen.findByRole('button', { name: 'Send' }));
+    // Both the quick-action button and the asset-row button say "Send"; the
+    // quick-action one is first in the DOM.
+    const [sendButton] = await screen.findAllByRole('button', { name: 'Send' });
+    if (!sendButton) throw new Error('Expected a Send button.');
+    await user.click(sendButton);
 
     expect(await screen.findByText(/Send from/)).toBeInTheDocument();
     expect(screen.getByPlaceholderText('Recipient address')).toBeInTheDocument();
-    expect(screen.getByPlaceholderText('Amount (base units)')).toBeInTheDocument();
+    expect(screen.getByLabelText('Amount (ETH)')).toBeInTheDocument();
+  });
+
+  it('auto-estimates the fee (debounced) and enables Send when balance suffices', async () => {
+    const user = userEvent.setup();
+    useWallet.setState({ vaultState: 'unlocked', accounts: [ACCOUNTS[0]!] });
+    installResponder({
+      'vault.status': { state: 'unlocked', unlockedUntil: Date.now() + 60_000 },
+      'zk.capability': null,
+      'account.balance': { chain: 'evm', address: '0x0000000000000000000000000000000000000001', balance: '1000000000000000000' },
+      'tx.estimate': {
+        chain: 'evm',
+        from: '0x0000000000000000000000000000000000000001',
+        feeNative: '21000000000',
+        gasLimit: '21000',
+        decimals: 18,
+        spendableBalance: '1000000000000000000',
+        symbol: 'ETH',
+      },
+      'tx.transfer': { chain: 'evm', from: '0x0000000000000000000000000000000000000001', to: 'addr', amountNative: '0', hash: '0xabc', decimals: 18 },
+    });
+
+    render(<App />);
+
+    const [sendButton] = await screen.findAllByRole('button', { name: 'Send' });
+    if (!sendButton) throw new Error('Expected a Send button.');
+    await user.click(sendButton);
+
+    // The fee appears WITHOUT a manual "Estimate fee" button (auto-run).
+    expect(screen.queryByRole('button', { name: 'Estimate fee' })).not.toBeInTheDocument();
+
+    await user.type(screen.getByPlaceholderText('Recipient address'), '0x1122334455667788990011223344556677889900');
+    await user.type(screen.getByLabelText('Amount (ETH)'), '0.5');
+
+    // Debounced estimate runs ~400ms after typing settles.
+    expect(await screen.findByText(/Estimated fee: 21000000000 Gwei/)).toBeInTheDocument();
+
+    // With sufficient balance the estimate resolves and Send is enabled.
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    expect(await screen.findByText(/Sent!/)).toBeInTheDocument();
+  });
+
+  it('disables Send and shows an inline error when the balance is insufficient', async () => {
+    const user = userEvent.setup();
+    useWallet.setState({ vaultState: 'unlocked', accounts: [ACCOUNTS[0]!] });
+    installResponder({
+      'vault.status': { state: 'unlocked', unlockedUntil: Date.now() + 60_000 },
+      'zk.capability': null,
+      'account.balance': { chain: 'evm', address: '0x0000000000000000000000000000000000000001', balance: '1000000000000000000' },
+      'tx.estimate': {
+        chain: 'evm',
+        from: '0x0000000000000000000000000000000000000001',
+        feeNative: '21000000000',
+        gasLimit: '21000',
+        decimals: 18,
+        spendableBalance: '0',
+        symbol: 'ETH',
+      },
+    });
+
+    render(<App />);
+
+    const [sendButton] = await screen.findAllByRole('button', { name: 'Send' });
+    if (!sendButton) throw new Error('Expected a Send button.');
+    await user.click(sendButton);
+    await user.type(screen.getByPlaceholderText('Recipient address'), '0x1122334455667788990011223344556677889900');
+    await user.type(screen.getByLabelText('Amount (ETH)'), '0.5');
+
+    // Auto-estimate resolves (fee shows) but the spendable gate trips.
+    expect(await screen.findByText(/Estimated fee: 21000000000 Gwei/)).toBeInTheDocument();
+    expect(await screen.findByText(/Insufficient balance/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
   });
 
   it('opens the export-key modal from the asset list and reveals the key', async () => {

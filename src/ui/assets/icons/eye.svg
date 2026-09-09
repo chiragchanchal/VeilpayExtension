@@ -1,0 +1,21 @@
+<svg viewBox="0 0 128 128" width="128" height="128" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="vpEyeGold" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#733800"/>
+      <stop offset="25%" stop-color="#F5B82E"/>
+      <stop offset="50%" stop-color="#FFE785"/>
+      <stop offset="75%" stop-color="#F5B82E"/>
+      <stop offset="100%" stop-color="#733800"/>
+    </linearGradient>
+  </defs>
+  <!-- Privacy Shielding Visor Arches -->
+  <path d="M 28 42 C 40 32 88 32 100 42" fill="none" stroke="url(#vpEyeGold)" stroke-width="4" stroke-linecap="round"/>
+  <path d="M 28 86 C 40 96 88 96 100 86" fill="none" stroke="url(#vpEyeGold)" stroke-width="4" stroke-linecap="round"/>
+  <!-- Almond Eye Aperture -->
+  <path d="M 18 64 C 34 38 94 38 110 64 C 94 90 34 90 18 64 Z" 
+        fill="none" stroke="url(#vpEyeGold)" stroke-width="6"/>
+  <!-- Iris & Center Lens -->
+  <circle cx="64" cy="64" r="18" fill="url(#vpEyeGold)"/>
+  <circle cx="64" cy="64" r="9" fill="#120B02"/>
+  <circle cx="67" cy="61" r="3" fill="#FFF0A3"/>
+</svg>

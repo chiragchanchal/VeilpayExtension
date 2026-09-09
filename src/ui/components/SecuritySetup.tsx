@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Icon } from '@/ui/components/Icon';
 import { t } from '@/i18n';
 import { useWallet } from '@/ui/store/useWallet';
 import { Button } from '@/ui/components/Button';
@@ -65,7 +66,7 @@ export function SecuritySetup({
         </header>
         <div className="flex flex-1 flex-col items-center justify-center gap-4">
           <div className="flex h-12 w-12 items-center justify-center rounded-full bg-success/20">
-            <span className="text-xl">✅</span>
+            <Icon name="check" className="h-6 w-6" />
           </div>
           <h2 className="font-display text-lg font-semibold text-content-primary">{t('surfaces.setupComplete')}</h2>
           <p className="font-body text-sm text-content-secondary text-center max-w-xs">

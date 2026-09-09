@@ -1,0 +1,15 @@
+<svg viewBox="0 0 128 128" width="128" height="128" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="vpLinkGold" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFE785"/>
+      <stop offset="50%" stop-color="#F5B82E"/>
+      <stop offset="100%" stop-color="#733800"/>
+    </linearGradient>
+  </defs>
+  <!-- Upper Left Loop -->
+  <path d="M 44 26 C 54 16 70 16 80 26 L 86 32 C 96 42 96 58 86 68 L 76 78 C 66 88 50 88 40 78 C 36 74 34 68 34 62 L 46 62 C 46 65 47 67 49 69 C 54 74 62 74 67 69 L 77 59 C 82 54 82 46 77 41 L 71 35 C 66 30 58 30 53 35 L 47 41 L 35 29 L 44 26 Z" 
+        fill="url(#vpLinkGold)"/>
+  <!-- Lower Right Loop -->
+  <path d="M 84 102 C 74 112 58 112 48 102 L 42 96 C 32 86 32 70 42 60 L 52 50 C 62 40 78 40 88 50 C 92 54 94 60 94 66 L 82 66 C 82 63 81 61 79 59 C 74 54 66 54 61 59 L 51 69 C 46 74 46 82 51 87 L 57 93 C 62 98 70 98 75 93 L 81 87 L 93 99 L 84 102 Z" 
+        fill="url(#vpLinkGold)"/>
+</svg>

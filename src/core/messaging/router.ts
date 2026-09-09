@@ -39,7 +39,8 @@ export type ErrorCode =
   | 'CHAIN_UNSUPPORTED'
   | 'X402_INVALID_CHALLENGE'
   | 'PROMPT_RATE_LIMITED'
-  | 'TX_REJECTED';
+  | 'TX_REJECTED'
+  | 'INSUFFICIENT_BALANCE';
 
 /** Thrown by handlers to produce a specific, display-safe error response. */
 export class ProtocolError extends Error {
@@ -356,6 +357,54 @@ export async function dispatch(
           id: request.id,
           ok: true,
           data: await handlers['faucet.request'](request.payload, ctx),
+        };
+      case 'wc.pair':
+        return {
+          id: request.id,
+          ok: true,
+          data: await handlers['wc.pair'](request.payload, ctx),
+        };
+      case 'wc.proposal.pending':
+        return {
+          id: request.id,
+          ok: true,
+          data: await handlers['wc.proposal.pending'](request.payload, ctx),
+        };
+      case 'wc.proposal.approve':
+        return {
+          id: request.id,
+          ok: true,
+          data: await handlers['wc.proposal.approve'](request.payload, ctx),
+        };
+      case 'wc.proposal.reject':
+        return {
+          id: request.id,
+          ok: true,
+          data: await handlers['wc.proposal.reject'](request.payload, ctx),
+        };
+      case 'wc.session.list':
+        return {
+          id: request.id,
+          ok: true,
+          data: await handlers['wc.session.list'](request.payload, ctx),
+        };
+      case 'wc.session.disconnect':
+        return {
+          id: request.id,
+          ok: true,
+          data: await handlers['wc.session.disconnect'](request.payload, ctx),
+        };
+      case 'wc.request.pending':
+        return {
+          id: request.id,
+          ok: true,
+          data: await handlers['wc.request.pending'](request.payload, ctx),
+        };
+      case 'wc.request.resolve':
+        return {
+          id: request.id,
+          ok: true,
+          data: await handlers['wc.request.resolve'](request.payload, ctx),
         };
       case 'tx.pending':
         return {

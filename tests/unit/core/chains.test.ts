@@ -191,6 +191,29 @@ describe('Chain Services', () => {
       expect(balance).toBe(BigInt(500000000));
     });
 
+    it('reads high-precision XLM balances into exact stroops (no float rounding)', async () => {
+      const service = createStellarService();
+
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          id: 'GDZST3XVCDTUJ76ZAV2HA72KYQJPOTPXP4NO5WYOXQJ5FNJR7G64AAAA',
+          balances: [
+            {
+              balance: '1.0000001',
+              asset_type: 'native',
+            },
+          ],
+          sequence: '1',
+        }),
+      });
+
+      const balance = await service.getBalance('GDZST3XVCDTUJ76ZAV2HA72KYQJPOTPXP4NO5WYOXQJ5FNJR7G64AAAA');
+
+      // 1 XLM + 1 stroop = 10000001 stroops, exact to the last stroop.
+      expect(balance).toBe(BigInt(10000001));
+    });
+
     it('estimates gas as 100 stroops', async () => {
       const service = createStellarService();
 
@@ -216,6 +239,31 @@ describe('Chain Services', () => {
       expect(fetchMock).toHaveBeenCalledWith(
         expect.stringContaining('/transactions'),
         expect.objectContaining({ method: 'POST' }),
+      );
+    });
+
+    it('surfaces Horizon result_codes (transaction + operations) on a failed POST', async () => {
+      const service = createStellarService();
+
+      fetchMock.mockResolvedValueOnce({
+        ok: false,
+        status: 400,
+        json: async () => ({
+          type: 'https://stellar.org/horizon-errors/transaction_failed',
+          title: 'Transaction Failed',
+          status: 400,
+          detail: 'The transaction failed when submitting to the Stellar network.',
+          extras: {
+            result_codes: {
+              transaction: 'tx_failed',
+              operations: ['op_underfunded'],
+            },
+          },
+        }),
+      });
+
+      await expect(service.sendTransaction('xdr_base64_string')).rejects.toThrow(
+        'result_codes: {"transaction":"tx_failed","operations":["op_underfunded"]}',
       );
     });
 

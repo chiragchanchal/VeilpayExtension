@@ -1,41 +1,22 @@
 /**
- * Indexer service — transaction history from the Veilpay backend.
+ * Transaction-history service.
  *
- * The backend indexer tracks on-chain transactions for all supported chains
- * and exposes a unified API. This service is read-only: it fetches history
- * for display in the wallet UI.
+ * Fetches an account's recent transactions from the chain itself (Stellar
+ * Horizon, Solana devnet RPC, EVM testnet RPC) and normalizes them into a
+ * uniform `IndexerTx` shape for the wallet UI. This replaced the earlier
+ * Veilpay-backend indexer, whose URL (`/api/v1/indexer/tx`) is not served by
+ * the available backend; the chains expose the same history directly and the
+ * extension already holds host permission for their testnet endpoints.
  *
- * Testnet-only (matches the extension's scope). The backend URL is configured
- * at build time; if absent, the service returns empty results.
- *
- * Response format mirrors the Veilpay backend indexer API:
- *   GET /api/v1/indexer/tx?address={address}&chain={chain}&limit={limit}&before={cursor}
- *
- * Each transaction includes a `chain` field so the UI can display them
- * uniformly without per-chain parsing.
+ * Testnet-only (matches the extension's scope).
  */
 
 import type { ChainId } from '@/core/messaging/protocol';
+import { fetchStellarHistory } from '@/core/chains/stellar/history';
+import { fetchSolanaHistory } from '@/core/chains/solana/history';
+import { fetchEvmHistory } from '@/core/chains/evm/history';
 import { putTransaction, listTransactionsByAddress } from '@/core/vault/repositories/transactions';
 import type { TransactionRecord } from '@/core/vault/storage-types';
-
-/**
- * Backend URL. Set at build time via `VITE_INDEXER_URL`.
- *
- * There is deliberately no localhost fallback: silently targeting a hardcoded
- * dev server would (a) leak wallet addresses to a process on the user's machine
- * and (b) mask a misconfiguration by "working" only on a developer's box. When
- * unset, the service returns empty history rather than fetching anywhere.
- *
- * Read at call time (not module load) so tests can stub the env var.
- */
-function backendUrl(): string | undefined {
-  return import.meta.env?.VITE_INDEXER_URL as string | undefined;
-}
-
-function baseUrl(): string {
-  return backendUrl() ?? '';
-}
 
 export interface IndexerTx {
   /** Transaction hash. */
@@ -63,21 +44,15 @@ export interface IndexerHistory {
   nextCursor: string | null;
 }
 
-const FETCH_TIMEOUT_MS = 10_000;
-
-interface FetchOutcome {
-  ok: boolean;
-  history: IndexerHistory;
-}
-
 /**
- * Fetches transaction history for a given address on a given chain.
+ * Fetches transaction history for a given address on a given chain, straight
+ * from the chain's own API.
  *
  * @param chain - Chain identifier.
  * @param address - Wallet address for the chain.
  * @param limit - Maximum number of transactions to return (default 20).
  * @param before - Cursor for pagination (from a previous response's `nextCursor`).
- * @returns Transaction history, or empty array if the backend is unreachable.
+ * @returns Transaction history.
  */
 export async function fetchTransactionHistory(
   chain: ChainId,
@@ -85,16 +60,26 @@ export async function fetchTransactionHistory(
   limit = 20,
   before?: string,
 ): Promise<IndexerHistory> {
-  const outcome = await rawFetch(chain, address, limit, before);
-  return outcome.history;
+  switch (chain) {
+    case 'stellar':
+      return fetchStellarHistory(address, limit, before);
+    case 'solana':
+      return fetchSolanaHistory(address, limit, before);
+    case 'evm':
+      return fetchEvmHistory(address, limit);
+    default: {
+      const exhaustive: never = chain;
+      throw new Error(`Unknown chain for history: ${String(exhaustive)}`);
+    }
+  }
 }
 
 /**
- * Distinguishes "authoritative empty" from "backend unreachable".
+ * Distinguishes "authoritative empty" from "chain unreachable".
  *
- * Cache policy this module owns: a non-empty remote answer is authoritative.
- * An unreachable/errored backend falls back to the validated local cache; a
- * healthy backend that returns zero transactions is also authoritative and must
+ * Cache policy this module owns: a non-empty direct answer is authoritative.
+ * An unreachable/errored chain falls back to the validated local cache; a
+ * healthy chain that returns zero transactions is also authoritative and must
  * NOT be masked by stale cache rows.
  */
 export async function fetchTransactionHistoryCached(
@@ -102,12 +87,16 @@ export async function fetchTransactionHistoryCached(
   address: string,
   limit = 20,
 ): Promise<IndexerHistory & { source: 'remote' | 'cache' }> {
-  const outcome = await rawFetch(chain, address, limit);
-  if (outcome.ok) {
-    return { ...outcome.history, source: 'remote' };
+  try {
+    const history = await fetchTransactionHistory(chain, address, limit);
+    // Persist validated rows through the repository. Direct answers are
+    // authoritative and always win; the cache is only a fallback.
+    await persistTransactions(chain, address, history.transactions).catch(() => undefined);
+    return { ...history, source: 'remote' };
+  } catch {
+    // Chain unreachable: read validated rows from the repository as a fallback.
   }
 
-  // Backend unreachable: read validated rows from the repository as a fallback.
   const cached = await listTransactionsByAddress(address).catch(() => []);
   const txs: IndexerTx[] = cached
     .filter((record) => record.chain === chain)
@@ -124,68 +113,6 @@ export async function fetchTransactionHistoryCached(
     }))
     .slice(0, limit);
   return { transactions: txs, nextCursor: null, source: 'cache' };
-}
-
-async function rawFetch(
-  chain: ChainId,
-  address: string,
-  limit: number,
-  before?: string,
-): Promise<FetchOutcome> {
-  const params = new URLSearchParams({
-    address,
-    chain,
-    limit: String(limit),
-  });
-  if (before !== undefined) {
-    params.set('before', before);
-  }
-
-  // The backend is not configured at build time: return empty rather than
-  // fetching to an unset/empty URL (which would throw and be logged as noise).
-  if (baseUrl() === '') {
-    return { ok: false, history: { transactions: [], nextCursor: null } };
-  }
-
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-    const response = await fetch(
-      `${baseUrl()}/api/v1/indexer/tx?${params.toString()}`,
-      { signal: controller.signal },
-    );
-    clearTimeout(timer);
-
-    if (!response.ok) {
-      console.warn(`[veilpay] Indexer returned HTTP ${response.status} for ${chain}:${address}`);
-      return { ok: false, history: { transactions: [], nextCursor: null } };
-    }
-
-    const data = (await response.json()) as unknown;
-    if (typeof data !== 'object' || data === null || !('transactions' in data)) {
-      return { ok: false, history: { transactions: [], nextCursor: null } };
-    }
-
-    const result = data as {
-      transactions: IndexerTx[];
-      nextCursor: string | null;
-    };
-    const transactions = Array.isArray(result.transactions) ? result.transactions : [];
-    // Persist validated results through the typed repository. Remote results
-    // are authoritative and always win; the cache is only a fallback.
-    await persistTransactions(chain, address, transactions).catch(() => undefined);
-    return {
-      ok: true,
-      history: {
-        transactions,
-        nextCursor: typeof result.nextCursor === 'string' ? result.nextCursor : null,
-      },
-    };
-  } catch (cause) {
-    // Network error or timeout — surface a warning but don't throw.
-    console.warn('[veilpay] Indexer fetch failed:', cause instanceof Error ? cause.message : cause);
-    return { ok: false, history: { transactions: [], nextCursor: null } };
-  }
 }
 
 /** Maps indexer rows to repository records and persists them (idempotent). */

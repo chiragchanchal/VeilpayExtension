@@ -1,4 +1,5 @@
 import { type InputHTMLAttributes, useId, useState } from 'react';
+import { Icon } from '@/ui/components/Icon';
 
 interface Props extends InputHTMLAttributes<HTMLInputElement> {
   error?: string | null;
@@ -42,7 +43,7 @@ export function Input({ error, passwordToggle, className = '', type, label, ...r
           type={resolvedType}
           aria-label={ariaLabel}
           className={[
-            'w-full rounded-lg border bg-surface-700 px-3 py-2',
+            'w-full rounded-xl border bg-surface-700/80 px-3 py-2',
             'font-body text-sm text-content-primary placeholder:text-content-tertiary',
             'transition-colors duration-base',
             error
@@ -63,7 +64,7 @@ export function Input({ error, passwordToggle, className = '', type, label, ...r
             tabIndex={-1}
             aria-label={showPassword ? 'Hide password' : 'Show password'}
           >
-            {showPassword ? '🙈' : '👁'}
+            <Icon name={showPassword ? 'eye-off' : 'eye'} className="h-5 w-5" />
           </button>
         )}
       </div>

@@ -40,6 +40,24 @@ export interface UnsignedSolanaTransfer {
   blockhash: Uint8Array;
 }
 
+/** An unsigned Solana SPL token transfer (TransferChecked). */
+export interface UnsignedSolanaSplTransfer {
+  /** Base58-encoded sender (also the token owner / authority). */
+  from: string;
+  /** Sender's SPL token account that holds the balance. */
+  source: string;
+  /** SPL mint for this token. */
+  mint: string;
+  /** Recipient's SPL token account. */
+  dest: string;
+  /** Amount in raw token units (10^-decimals). */
+  amount: bigint;
+  /** The token's decimals (from the mint), re-encoded into the wire data. */
+  decimals: number;
+  /** 32-byte recent blockhash from RPC. */
+  blockhash: Uint8Array;
+}
+
 /** A fully signed, broadcast-ready Solana transaction. */
 export interface SignedSolanaTransaction {
   /** Base64-encoded transaction for `sendTransaction` RPC. */
@@ -52,6 +70,14 @@ export interface SignedSolanaTransaction {
 
 // The SystemProgram ID is the all-zero pubkey (32 bytes).
 const SYSTEM_PROGRAM: Uint8Array = new Uint8Array(32);
+
+/** SPL Token program ID: TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA. */
+const TOKEN_PROGRAM: Uint8Array = base58.decode('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
+
+/** SPL Associated Token Account program ID. */
+const ASSOCIATED_TOKEN_PROGRAM: Uint8Array = base58.decode(
+  'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL',
+);
 
 // ---------------------------------------------------------------------------
 // Compact-u16 encoding (Solana's multi-byte length prefix)
@@ -190,6 +216,143 @@ export function signSolanaTransfer(
     signingHash: bytesToHex(messageHash),
     from,
   };
+}
+
+/**
+ * Builds an unsigned SPL `TransferChecked` message.
+ *
+ * Account-key layout (in wire order):
+ *   0  feePayer (from, signer + writable)
+ *   1  source token account (writable, holds the balance)
+ *   2  mint (read-only)
+ *   3  dest token account (writable)
+ *   4  SPL Token program (read-only)
+ *
+ * Message header [numRequired, readonlySigned, readonlyUnsigned] = [1, 0, 2]
+ * (only `from` signs; mint and the token program are read-only and unsigned).
+ *
+ * Instruction `TransferChecked` (index 12) with data:
+ *   [amount u64 LE][decimals u8]
+ * and account indexes [source, mint, dest, owner].
+ */
+function buildSplMessage(
+  fromPubkey: Uint8Array,
+  sourcePubkey: Uint8Array,
+  mintPubkey: Uint8Array,
+  destPubkey: Uint8Array,
+  amount: bigint,
+  decimals: number,
+  blockhash: Uint8Array,
+): Uint8Array {
+  const header = new Uint8Array([1, 0, 2]);
+
+  const accountKeys = [fromPubkey, sourcePubkey, mintPubkey, destPubkey, TOKEN_PROGRAM];
+  const accountKeysLen = encodeCompactU16(accountKeys.length);
+  const accountKeysFlat = concat(accountKeys);
+
+  const amountLE = toLE64(amount);
+  const instructionData = new Uint8Array([12, ...amountLE, decimals & 0xff]);
+  const instruction = encodeInstruction(4, [1, 2, 3, 0], instructionData);
+
+  const instructionsLen = encodeCompactU16(1);
+
+  return concat([
+    header,
+    accountKeysLen,
+    accountKeysFlat,
+    blockhash,
+    instructionsLen,
+    instruction,
+  ]);
+}
+
+/**
+ * Signs an SPL token transfer and returns the broadcast-ready base64 string.
+ * `source` and `dest` are the token accounts; `from` is the owner/authority and
+ * fee payer. Reuses the same envelope layout as the native transfer.
+ */
+export function signSolanaSplTransfer(
+  tx: UnsignedSolanaSplTransfer,
+  privateKey: Uint8Array,
+): SignedSolanaTransaction {
+  if (privateKey.length !== 32) {
+    throw new Error(`Solana private key must be 32 bytes, got ${privateKey.length}.`);
+  }
+
+  const fromPubkey = parseAddress(tx.from);
+  const sourcePubkey = parseAddress(tx.source);
+  const mintPubkey = parseAddress(tx.mint);
+  const destPubkey = parseAddress(tx.dest);
+
+  const message = buildSplMessage(
+    fromPubkey,
+    sourcePubkey,
+    mintPubkey,
+    destPubkey,
+    tx.amount,
+    tx.decimals,
+    tx.blockhash,
+  );
+  const messageHash = sha256(message);
+  const signature = ed25519.sign(messageHash, privateKey);
+
+  const sigCount = new Uint8Array([1]);
+  const raw = concat([sigCount, signature, message]);
+
+  const from = base58.encode(fromPubkey);
+
+  return {
+    raw: btoa(String.fromCharCode(...raw)),
+    signingHash: bytesToHex(messageHash),
+    from,
+  };
+}
+
+/**
+ * Finds a program-derived address (PDA) for the given seeds + program id,
+ * following Solana's canonical scheme: hash `["ProgramDerivedAddress", seeds,
+ * bump, programId]` and, if that lands on the ed25519 curve, decrement the
+ * bump seed until it is off-curve. Returns the base58 address.
+ */
+export function findProgramAddress(seeds: Uint8Array[], programId: Uint8Array): {
+  address: string;
+  bump: number;
+} {
+  const prefix = new TextEncoder().encode('ProgramDerivedAddress');
+  for (let bump = 255; bump >= 0; bump -= 1) {
+    const parts: Uint8Array[] = [prefix, ...seeds, new Uint8Array([bump]), programId];
+    const candidate = sha256(concat(parts));
+    if (!isOnCurve(candidate)) {
+      return { address: base58.encode(candidate), bump };
+    }
+  }
+  throw new Error('Unable to find a valid off-curve PDA.');
+}
+
+/** True when the 32-byte value is a valid point on the ed25519 curve. */
+function isOnCurve(bytes: Uint8Array): boolean {
+  try {
+    ed25519.ExtendedPoint.fromHex(bytes);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Derives the canonical associated token account (ATA) for an owner + mint:
+ * the PDA of the ATA program with seeds [owner, TOKEN_PROGRAM, mint]. When the
+ * recipient has never received this token, the ATA must be created with an
+ * `initializeAccount` instruction before a transfer can credit it.
+ */
+export function deriveAssociatedTokenAddress(owner: string, mint: string): string {
+  const ownerPubkey = parseAddress(owner);
+  const mintPubkey = parseAddress(mint);
+  const { address } = findProgramAddress(
+    [ownerPubkey, TOKEN_PROGRAM, mintPubkey],
+    ASSOCIATED_TOKEN_PROGRAM,
+  );
+  return address;
 }
 
 // ---------------------------------------------------------------------------
