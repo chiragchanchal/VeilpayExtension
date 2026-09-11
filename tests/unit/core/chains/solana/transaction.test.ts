@@ -125,6 +125,19 @@ describe('Solana transfer serialization', () => {
     // Two instruction accounts: [feePayer, destination].
     expect(raw[instrStart + 1]).toBe(2);
     expect(raw.subarray(instrStart + 2, instrStart + 4)).toEqual(new Uint8Array([0, 1]));
+
+    // Instruction data is bincode: u32 LE discriminant (2 = Transfer) + u64 LE
+    // lamports = 12 bytes. A single-byte discriminant is rejected by the
+    // runtime with "invalid instruction data".
+    const dataLen = raw[instrStart + 4];
+    expect(dataLen).toBe(12);
+    expect(raw.subarray(instrStart + 5, instrStart + 9)).toEqual(
+      new Uint8Array([2, 0, 0, 0]),
+    );
+    // 1000 lamports = 0x03e8, little-endian.
+    expect(raw.subarray(instrStart + 9, instrStart + 17)).toEqual(
+      new Uint8Array([0xe8, 0x03, 0, 0, 0, 0, 0, 0]),
+    );
   });
 
   it('rejects an invalid private key length', () => {

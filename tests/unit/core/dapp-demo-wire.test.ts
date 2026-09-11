@@ -57,4 +57,21 @@ describe('dapp-demo Solana transfer ↔ wallet signer integration', () => {
     const sigSlot = bytes.subarray(1, 65);
     expect(Array.from(sigSlot).every((b) => b === 0)).toBe(true);
   });
+
+  it('encodes SystemProgram transfer data as a u32 discriminant plus u64 lamports', () => {
+    const serialized = buildDemoSolanaTransfer(FEE_PAYER, TO, 1_000_000n, BLOCKHASH);
+    const bytes = base58Decode(serialized);
+
+    // sigCount(1) + sig(64) + header(3) + keyCount(1) + keys(96) + blockhash(32)
+    // + instructionCount(1) lands on the instruction.
+    const instrStart = 1 + 64 + 3 + 1 + 96 + 32 + 1;
+    expect(bytes[instrStart]).toBe(2); // programIdIndex
+    const dataLen = bytes[instrStart + 4];
+    // 4-byte bincode discriminant + 8-byte lamports; a 9-byte payload is the
+    // "invalid instruction data" failure the runtime reports.
+    expect(dataLen).toBe(12);
+    expect(bytes.subarray(instrStart + 5, instrStart + 9)).toEqual(
+      new Uint8Array([2, 0, 0, 0]),
+    );
+  });
 });

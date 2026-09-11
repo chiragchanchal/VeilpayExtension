@@ -147,9 +147,14 @@ function buildMessage(
   // Instruction: SystemProgram.transfer
   // programIdIndex = 2 (SystemProgram is the last key)
   // accounts = [0, 1] (feePayer at 0, destination at 1)
-  // data = [2, lamports as 8-byte LE]
+  //
+  // The SystemProgram instruction data is bincode-serialized, so the enum
+  // discriminant is a little-endian u32 (4 bytes), not a single byte:
+  //   [02 00 00 00][lamports as u64 LE]  => 12 bytes total.
+  // Emitting `[02][lamports]` (9 bytes) is rejected by the runtime with
+  // "invalid instruction data".
   const lamportsLE = toLE64(lamports);
-  const instructionData = new Uint8Array([2, ...lamportsLE]);
+  const instructionData = new Uint8Array([2, 0, 0, 0, ...lamportsLE]);
   const instruction = encodeInstruction(2, [0, 1], instructionData);
 
   const instructionsLen = encodeCompactU16(1);
@@ -270,6 +275,10 @@ function buildSplMessage(
   const accountKeysFlat = concat(accountKeys);
 
   const amountLE = toLE64(amount);
+  // SPL Token uses a single-byte instruction tag (12 = TransferChecked), then
+  // the amount as u64 LE and the decimals byte => 10 bytes. This differs from
+  // the SystemProgram, whose bincode discriminant is a u32; both encodings are
+  // what their respective programs parse.
   const instructionData = new Uint8Array([12, ...amountLE, decimals & 0xff]);
   // TransferChecked accounts, in the instruction's own order:
   //   [source, mint, dest, owner] = [1, 3, 2, 0]

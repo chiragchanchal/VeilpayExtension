@@ -81,7 +81,9 @@ export function buildDemoSolanaTransfer(
   const systemProgram = new Uint8Array(32);
   const header = new Uint8Array([1, 0, 1]);
   const keys = concatBytes([encodeCompactU16(3), fromBytes, toBytes, systemProgram]);
-  const instructionData = concatBytes([new Uint8Array([2]), toLE64(lamports)]);
+  // SystemProgram instructions are bincode-serialized: the variant discriminant
+  // is a u32 LE (4 bytes), so `Transfer` data is [02 00 00 00][u64 LE lamports].
+  const instructionData = concatBytes([new Uint8Array([2, 0, 0, 0]), toLE64(lamports)]);
   const accountIndices = new Uint8Array([0, 1]);
   const instruction = concatBytes([
     new Uint8Array([2]), // programIdIndex = SystemProgram at index 2
