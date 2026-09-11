@@ -19,8 +19,8 @@ describe('i18n scaffold', () => {
   });
 
   it('interpolates named parameters', () => {
-    expect(t('approval.requestAccess', { origin: 'https://example.test' })).toBe(
-      'A dapp at https://example.test is requesting access to your wallet.',
+    expect(t('approval.requestAction', { action: 'a signature' })).toBe(
+      'This site is requesting a signature from your wallet.',
     );
   });
 

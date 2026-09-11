@@ -5,7 +5,7 @@ import { Button } from '@/ui/components/Button';
 import { Card } from '@/ui/components/Card';
 import { Input } from '@/ui/components/Input';
 import { TestnetBanner } from '@/ui/components/TestnetBanner';
-import { Icon, type IconName } from '@/ui/components/Icon';
+import { Icon } from '@/ui/components/Icon';
 import { Dashboard } from '@/ui/components/Dashboard';
 import { TransactionHistoryView } from '@/ui/components/TransactionHistoryView';
 import { ConnectionApproval } from '@/ui/components/ConnectionApproval';
@@ -13,6 +13,8 @@ import { TransactionApproval } from '@/ui/components/TransactionApproval';
 import { X402Approval } from '@/ui/components/X402Approval';
 import { GrantApproval } from '@/ui/components/GrantApproval';
 import { WalletConnectView } from '@/ui/components/WalletConnectView';
+import { BrandLogo } from '@/ui/components/BrandLogo';
+import { Glyph, type GlyphName } from '@/ui/components/Glyph';
 
 /** Full-height wallet companion surface for approvals and quick account access. */
 export default function SidePanelApp() {
@@ -158,9 +160,14 @@ export default function SidePanelApp() {
   }
 
   const header = (
-    <header className="flex items-baseline justify-between">
-      <h1 className="font-display text-lg font-bold text-content-primary">{t('brand')}</h1>
-      <span className="font-mono text-xs text-content-tertiary">{t('version')}</span>
+    <header className="flex items-center justify-between">
+      <div className="flex items-center gap-2">
+        <BrandLogo size="md" />
+        <h1 className="font-display text-lg font-bold text-content-primary">{t('brand')}</h1>
+      </div>
+      <span className="rounded-full border border-surface-600 px-2 py-0.5 font-mono text-[10px] text-content-tertiary">
+        {t('version')}
+      </span>
     </header>
   );
 
@@ -208,11 +215,11 @@ export default function SidePanelApp() {
     );
   }
 
-  const tabs: { key: 'wallet' | 'activity' | 'settings' | 'connect'; label: string; icon: IconName }[] = [
-    { key: 'wallet', label: 'Wallet', icon: 'card' },
-    { key: 'activity', label: t('settings.transactions'), icon: 'send' },
+  const tabs: { key: 'wallet' | 'activity' | 'settings' | 'connect'; label: string; icon: GlyphName }[] = [
+    { key: 'wallet', label: 'Wallet', icon: 'wallet' },
+    { key: 'activity', label: t('settings.transactions'), icon: 'activity' },
     { key: 'connect', label: 'Connect', icon: 'link' },
-    { key: 'settings', label: t('common.settings'), icon: 'key' },
+    { key: 'settings', label: t('common.settings'), icon: 'settings' },
   ];
 
   return (
@@ -252,19 +259,20 @@ export default function SidePanelApp() {
           </div>
         )}
       </div>
-      <nav className="flex shrink-0 justify-around border-t border-surface-600 bg-surface-800 px-2 py-2">
+      <nav className="flex shrink-0 gap-1 border-t border-surface-700/70 bg-surface-800/80 px-2 py-2 backdrop-blur">
         {tabs.map((tab) => (
           <button
             key={tab.key}
             type="button"
             onClick={() => setActiveTab(tab.key)}
-            className={`flex flex-1 flex-col items-center gap-0.5 rounded-lg px-2 py-1.5 font-body text-xs transition-colors ${
+            aria-current={activeTab === tab.key ? 'page' : undefined}
+            className={`flex flex-1 flex-col items-center gap-1 rounded-xl px-2 py-2 font-body text-[11px] transition-all ${
               activeTab === tab.key
-                ? 'bg-accent-primary/20 text-content-primary font-semibold'
+                ? 'bg-accent-500/15 font-semibold text-accent-400'
                 : 'text-content-tertiary hover:bg-surface-700 hover:text-content-secondary'
             }`}
           >
-            <Icon name={tab.icon} className="h-4 w-4" />
+            <Glyph name={tab.icon} className="h-[18px] w-[18px]" />
             {tab.label}
           </button>
         ))}

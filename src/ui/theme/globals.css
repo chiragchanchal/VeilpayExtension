@@ -22,6 +22,28 @@
     background-attachment: fixed;
   }
 
+  ::selection {
+    @apply bg-accent-500/30 text-content-primary;
+  }
+
+  /* Slim, theme-aware scrollbars (Chromium). */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply rounded-full bg-surface-600;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-surface-500;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
   /* Visible focus for keyboard users, suppressed for mouse clicks.
      Required by the WCAG 2.2 AA gate. */
   :focus-visible {

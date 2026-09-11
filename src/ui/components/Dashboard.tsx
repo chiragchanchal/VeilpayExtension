@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Icon } from '@/ui/components/Icon';
+import { Glyph } from '@/ui/components/Glyph';
 import { t } from '@/i18n';
 import { useWallet, type AccountView } from '@/ui/store/useWallet';
 import { Button } from '@/ui/components/Button';
@@ -148,7 +148,7 @@ function AssetRow({
               title={`${t('common.export')} ${account.chain} private key`}
               className="rounded-lg bg-surface-700 px-1.5 py-1 text-content-tertiary transition-colors hover:bg-surface-600 hover:text-content-primary"
             >
-              <Icon name="key" className="h-3.5 w-3.5" />
+              <Glyph name="key" className="h-3.5 w-3.5" />
             </button>
           </div>
         </div>
@@ -223,7 +223,7 @@ export function Dashboard({
             aria-label="Refresh balances"
             title="Refresh balances"
           >
-            <Icon name={isLoading ? 'spinner' : 'spinner'} className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
+            <Glyph name="refresh" className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
           </Button>
           <Button variant="ghost" size="sm" onClick={onImport}>
             {t('common.import')}
@@ -277,7 +277,7 @@ export function Dashboard({
           disabled={accounts.length === 0}
           className="flex items-center justify-center gap-1.5 rounded-xl border border-surface-700 bg-surface-800 px-2 py-2.5 font-body text-sm font-semibold text-content-primary transition-colors hover:border-accent-500/50 hover:bg-surface-700 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          <Icon name="send" className="h-4 w-4" />
+          <Glyph name="send" className="h-4 w-4" />
           {t('common.send')}
         </button>
         <button
@@ -286,7 +286,7 @@ export function Dashboard({
           disabled={accounts.length === 0}
           className="flex items-center justify-center gap-1.5 rounded-xl border border-surface-700 bg-surface-800 px-2 py-2.5 font-body text-sm font-semibold text-content-primary transition-colors hover:border-accent-500/50 hover:bg-surface-700 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          <Icon name="card" className="h-4 w-4" />
+          <Glyph name="receive" className="h-4 w-4" />
           {t('common.receive')}
         </button>
         <button
@@ -295,7 +295,7 @@ export function Dashboard({
           disabled={accounts.length === 0}
           className="flex items-center justify-center gap-1.5 rounded-xl border border-surface-700 bg-surface-800 px-2 py-2.5 font-body text-sm font-semibold text-content-primary transition-colors hover:border-accent-500/50 hover:bg-surface-700 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          <Icon name="wand" className="h-4 w-4" />
+          <Glyph name="droplet" className="h-4 w-4" />
           Faucet
         </button>
       </div>
@@ -341,11 +341,11 @@ export function Dashboard({
                   <span className="inline-flex items-center gap-1 font-mono text-xs text-content-primary">
                     {tx.chain}
                     {tx.status === 'confirmed' ? (
-                      <Icon name="check" className="h-3.5 w-3.5 text-success" />
+                      <Glyph name="check" className="h-3.5 w-3.5 text-success" />
                     ) : tx.status === 'pending' ? (
-                      <Icon name="spinner" className="h-3.5 w-3.5 animate-spin text-content-secondary" />
+                      <Glyph name="spinner" className="h-3.5 w-3.5 animate-spin text-content-secondary" />
                     ) : (
-                      <Icon name="error" className="h-3.5 w-3.5 text-error" />
+                      <Glyph name="alert" className="h-3.5 w-3.5 text-error" />
                     )}
                   </span>
                   <span className="truncate font-mono text-[10px] text-content-tertiary">

@@ -11,6 +11,7 @@ import { TransactionApproval } from '@/ui/components/TransactionApproval';
 import { X402Approval } from '@/ui/components/X402Approval';
 import { GrantApproval } from '@/ui/components/GrantApproval';
 import { Icon } from '@/ui/components/Icon';
+import { Glyph } from '@/ui/components/Glyph';
 import { BrandLogo } from '@/ui/components/BrandLogo';
 import { QRCode } from '@/ui/components/QRCode';
 import type { StellarAssetInput, TokenInputType, ZkCapability } from '@/core/messaging/protocol';
@@ -1319,7 +1320,15 @@ function ReceiveView({
           </p>
         </Card>
         <Button fullWidth onClick={handleCopy}>
-          {copied ? 'Copied!' : 'Copy address'}
+          {copied ? (
+            <>
+              <Glyph name="check" className="h-4 w-4" /> Copied!
+            </>
+          ) : (
+            <>
+              <Glyph name="copy" className="h-4 w-4" /> Copy address
+            </>
+          )}
         </Button>
 
         <div className="w-full">
@@ -1352,7 +1361,7 @@ function ReceiveView({
         </div>
 
         <Button variant="ghost" fullWidth onClick={onBack}>
-          Back
+          <Glyph name="arrow-left" className="h-4 w-4" /> Back
         </Button>
       </div>
     </main>
