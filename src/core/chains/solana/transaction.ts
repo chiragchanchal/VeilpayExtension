@@ -132,20 +132,25 @@ function buildMessage(
   lamports: bigint,
   blockhash: Uint8Array,
 ): Uint8Array {
-  const header = new Uint8Array([1, 0, 0]); // 1 signer, 0 readonly-signed, 0 readonly-unsigned
+  // Account keys MUST be ordered by weight: writable signers, read-only
+  // signers, writable non-signers, read-only non-signers. The SystemProgram is
+  // a read-only non-signer, so it goes last, and the header must count it as
+  // read-only unsigned. Marking a program writable (or ordering it before a
+  // writable account) makes the node reject the transaction outright.
+  const header = new Uint8Array([1, 0, 1]); // 1 signer, 0 readonly-signed, 1 readonly-unsigned
 
-  // Account keys: feePayer (signer), SystemProgram, destination
-  const accountKeys = [fromPubkey, SYSTEM_PROGRAM, toPubkey];
+  // Account keys: feePayer (signer), destination (writable), SystemProgram (read-only)
+  const accountKeys = [fromPubkey, toPubkey, SYSTEM_PROGRAM];
   const accountKeysLen = encodeCompactU16(accountKeys.length);
   const accountKeysFlat = concat(accountKeys);
 
   // Instruction: SystemProgram.transfer
-  // programIdIndex = 1 (SystemProgram is at index 1)
-  // accounts = [0, 2] (feePayer at 0, destination at 2)
+  // programIdIndex = 2 (SystemProgram is the last key)
+  // accounts = [0, 1] (feePayer at 0, destination at 1)
   // data = [2, lamports as 8-byte LE]
   const lamportsLE = toLE64(lamports);
   const instructionData = new Uint8Array([2, ...lamportsLE]);
-  const instruction = encodeInstruction(1, [0, 2], instructionData);
+  const instruction = encodeInstruction(2, [0, 1], instructionData);
 
   const instructionsLen = encodeCompactU16(1);
 
@@ -202,10 +207,15 @@ export function signSolanaTransfer(
 
   const message = buildMessage(fromPubkey, toPubkey, tx.lamports, tx.blockhash);
   const messageHash = sha256(message);
-  const signature = ed25519.sign(messageHash, privateKey);
+  // Solana signs the raw serialized message with plain Ed25519 (the network
+  // verifies `ed25519.verify(message, ...)`; `sha256` is only kept as a
+  // diagnostic id, never as the signed payload).
+  const signature = ed25519.sign(message, privateKey);
 
-  // Solana wire format: [compact-u16 signature count] [signatures...] [message]
-  // For a single signature: [1] [64 bytes signature] [message]
+  // Solana legacy wire format: [compact-u16 signature count][signatures...][message]
+  // For a single signature: [1][64-byte signature][message]. Legacy transactions
+  // carry no version prefix (that is `0x80`-masked v0); `@solana/web3.js`
+  // serializes them exactly this way.
   const sigCount = new Uint8Array([1]);
   const raw = concat([sigCount, signature, message]);
 
@@ -246,13 +256,24 @@ function buildSplMessage(
 ): Uint8Array {
   const header = new Uint8Array([1, 0, 2]);
 
-  const accountKeys = [fromPubkey, sourcePubkey, mintPubkey, destPubkey, TOKEN_PROGRAM];
+  // Keys must follow the weight ordering (see `buildMessage`): the writable
+  // non-signers (source, dest) come before the read-only non-signers (mint,
+  // token program). Putting the read-only mint between the writable accounts
+  // is invalid and the node rejects the transaction.
+  //   0 feePayer (signer, writable)
+  //   1 source token account (writable)
+  //   2 dest token account (writable)
+  //   3 mint (read-only)
+  //   4 SPL Token program (read-only)
+  const accountKeys = [fromPubkey, sourcePubkey, destPubkey, mintPubkey, TOKEN_PROGRAM];
   const accountKeysLen = encodeCompactU16(accountKeys.length);
   const accountKeysFlat = concat(accountKeys);
 
   const amountLE = toLE64(amount);
   const instructionData = new Uint8Array([12, ...amountLE, decimals & 0xff]);
-  const instruction = encodeInstruction(4, [1, 2, 3, 0], instructionData);
+  // TransferChecked accounts, in the instruction's own order:
+  //   [source, mint, dest, owner] = [1, 3, 2, 0]
+  const instruction = encodeInstruction(4, [1, 3, 2, 0], instructionData);
 
   const instructionsLen = encodeCompactU16(1);
 
@@ -294,7 +315,8 @@ export function signSolanaSplTransfer(
     tx.blockhash,
   );
   const messageHash = sha256(message);
-  const signature = ed25519.sign(messageHash, privateKey);
+  // Plain Ed25519 over the raw message, matching the native path.
+  const signature = ed25519.sign(message, privateKey);
 
   const sigCount = new Uint8Array([1]);
   const raw = concat([sigCount, signature, message]);
@@ -472,8 +494,7 @@ export function signSolanaTransaction(
     throw new Error('Solana transaction: wallet is not a required signer.');
   }
 
-  const messageHash = sha256(parsed.message);
-  const signature = ed25519.sign(messageHash, privateKey);
+  const signature = ed25519.sign(parsed.message, privateKey);
 
   // Rebuild the wire format: [count prefix][signatures with ours inserted at
   // `signerIndex`][message]. Existing signatures are preserved; only the slot

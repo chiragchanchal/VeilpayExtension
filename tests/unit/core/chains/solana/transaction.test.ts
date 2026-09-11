@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { base58 } from '@scure/base';
 import { ed25519 } from '@noble/curves/ed25519';
 import { sha256 } from '@noble/hashes/sha256';
+import { bytesToHex } from '@noble/hashes/utils';
 import {
   deriveAssociatedTokenAddress,
   findProgramAddress,
@@ -87,7 +88,8 @@ describe('Solana transfer serialization', () => {
 
     const raw = Uint8Array.from(atob(result.raw), (c) => c.charCodeAt(0));
 
-    // First byte = signature count (1).
+    // First byte = signature count (1). Legacy transactions have no version
+    // prefix (v0 transactions use the 0x80-masked version byte).
     expect(raw[0]).toBe(1);
 
     // Next 64 bytes = signature.
@@ -95,14 +97,34 @@ describe('Solana transfer serialization', () => {
 
     // After the signature, the message begins.
     // Message header: [numRequiredSignatures, numReadonlySignedAccounts, numReadonlyUnsignedAccounts]
+    // The SystemProgram is a read-only non-signer, so the last count is 1.
     const header = raw.subarray(65, 68);
-    expect(header).toEqual(new Uint8Array([1, 0, 0]));
+    expect(header).toEqual(new Uint8Array([1, 0, 1]));
 
-    // Account keys follow (compact-u16 length prefix, then 3 × 32-byte keys).
-    // feePayer (index 0), SystemProgram (index 1), destination (index 2)
+    // Account keys follow (compact-u16 length prefix, then 3 × 32-byte keys)
+    // in Solana's weight order: signers, writable non-signers, read-only
+    // non-signers. Layout: feePayer (0), destination (1), SystemProgram (2).
     const keyCount = raw[68]; // should be 3 (small enough to fit in 1 byte)
     expect(keyCount).toBe(3);
-    expect(raw.length).toBeGreaterThanOrEqual(68 + 1 + 3 * 32 + 32);
+    expect(raw.length).toBeGreaterThanOrEqual(69 + 3 * 32 + 32);
+
+    const keyStart = 69;
+    const key0 = raw.subarray(keyStart, keyStart + 32);
+    const key1 = raw.subarray(keyStart + 32, keyStart + 64);
+    const key2 = raw.subarray(keyStart + 64, keyStart + 96);
+    expect(base58.encode(key0)).toBe(FROM_ADDRESS);
+    expect(base58.encode(key1)).toBe(TO_ADDRESS);
+    // SystemProgram address is the all-zero public key.
+    expect(base58.encode(key2)).toBe(base58.encode(new Uint8Array(32)));
+
+    // Instruction starts after: sigCount(1) + sig(64) + header(3) + keyCount(1)
+    // + keys(96) + blockhash(32) + instructionCount(1).
+    const instrStart = 1 + 64 + 3 + 1 + 96 + 32 + 1;
+    // programIdIndex = 2 (SystemProgram is the last key).
+    expect(raw[instrStart]).toBe(2);
+    // Two instruction accounts: [feePayer, destination].
+    expect(raw[instrStart + 1]).toBe(2);
+    expect(raw.subarray(instrStart + 2, instrStart + 4)).toEqual(new Uint8Array([0, 1]));
   });
 
   it('rejects an invalid private key length', () => {
@@ -112,6 +134,26 @@ describe('Solana transfer serialization', () => {
       lamports: 1000n,
       blockhash: BLOCKHASH,
     }, new Uint8Array(16))).toThrow('32 bytes');
+  });
+
+  it('signs the raw message with plain Ed25519, not a prehash', () => {
+    const result = signSolanaTransfer({
+      from: FROM_ADDRESS,
+      to: TO_ADDRESS,
+      lamports: 1000n,
+      blockhash: BLOCKHASH,
+    }, PRIVATE_KEY);
+
+    const raw = Uint8Array.from(atob(result.raw), (c) => c.charCodeAt(0));
+    const signature = raw.subarray(1, 65);
+    const message = raw.subarray(65);
+
+    // The network verifies a plain Ed25519 signature over the serialized
+    // message, so signing the SHA-256 hash instead would be accepted here but
+    // rejected on-chain. This assertion is what keeps the two from drifting.
+    expect(ed25519.verify(signature, message, FROM_PUBKEY)).toBe(true);
+    expect(ed25519.verify(signature, sha256(message), FROM_PUBKEY)).toBe(false);
+    expect(result.signingHash).toBe(bytesToHex(sha256(message)));
   });
 
   it('rejects an invalid amount of zero', () => {
@@ -166,27 +208,27 @@ describe('Solana SPL transfer serialization', () => {
 
     const raw = Uint8Array.from(atob(result.raw), (c) => c.charCodeAt(0));
 
-    // Signature count + 64-byte signature, then the message header.
+    // Signature-count prefix + 64-byte signature, then the message header.
+    expect(raw[0]).toBe(1);
     const header = raw.subarray(65, 68);
     expect(header).toEqual(new Uint8Array([1, 0, 2])); // 1 signer, 0 readonly-signed, 2 readonly-unsigned
 
-    // Account-key count (compact-u16). 5 keys: from, source, mint, dest, TOKEN_PROGRAM.
+    // Account-key count (compact-u16). 5 keys: from, source, dest, mint, TOKEN_PROGRAM.
     const keyCount = raw[68];
     expect(keyCount).toBe(5);
-    expect(raw.length).toBeGreaterThan(68 + 1 + 5 * 32 + 32);
+    expect(raw.length).toBeGreaterThan(69 + 5 * 32 + 32);
 
-    // Locate the instruction data: after signatures(65) + header(3) + keyCount(1)
-    // + keys(160) + blockhash(32) is the instruction count (1 byte), then the
-    // instruction: programIdIndex(1) + accountIndexCount(1) + 4 account indexes
-    // + dataLen(1) + data.
-    const instrStart = 65 + 3 + 1 + 160 + 32 + 1;
+    // Locate the instruction data: after sigCount(1) + signatures(64) + header(3)
+    // + keyCount(1) + keys(160) + blockhash(32) is the instruction count (1
+    // byte), then the instruction.
+    const instrStart = 1 + 64 + 3 + 1 + 160 + 32 + 1;
     // programIdIndex should reference TOKEN_PROGRAM at index 4.
     expect(raw[instrStart]).toBe(4);
-    // Account index count: 4 (source, mint, dest, owner).
+    // Account index count: 4 (source, dest, mint, owner in the new key layout).
     expect(raw[instrStart + 1]).toBe(4);
-    // The four account indexes.
+    // The four account indexes: source=1, mint=3, dest=2, owner=0.
     expect(raw.subarray(instrStart + 2, instrStart + 6)).toEqual(
-      new Uint8Array([1, 2, 3, 0]),
+      new Uint8Array([1, 3, 2, 0]),
     );
     const dataLen = raw[instrStart + 6];
     // TransferChecked data = [instruction 12][amount u64 LE][decimals u8] => 10 bytes.
@@ -216,6 +258,30 @@ describe('Solana SPL transfer serialization', () => {
       from: FROM_ADDRESS, source: SOURCE_ADDRESS, mint: MINT, dest: DEST_ADDRESS,
       amount: 100n, decimals: 9, blockhash: BLOCKHASH,
     }, new Uint8Array(16))).toThrow('32 bytes');
+  });
+
+  it('orders account keys by weight and signs the raw message', () => {
+    const result = signSolanaSplTransfer({
+      from: FROM_ADDRESS, source: SOURCE_ADDRESS, mint: MINT, dest: DEST_ADDRESS,
+      amount: 100n, decimals: 9, blockhash: BLOCKHASH,
+    }, PRIVATE_KEY);
+
+    const raw = Uint8Array.from(atob(result.raw), (c) => c.charCodeAt(0));
+    const keyStart = 69;
+    const key = (i: number): string =>
+      base58.encode(raw.subarray(keyStart + i * 32, keyStart + (i + 1) * 32));
+
+    // Writable non-signers (source, dest) precede read-only non-signers
+    // (mint, token program); a read-only key among the writable ones is invalid.
+    expect(key(0)).toBe(FROM_ADDRESS);
+    expect(key(1)).toBe(SOURCE_ADDRESS);
+    expect(key(2)).toBe(DEST_ADDRESS);
+    expect(key(3)).toBe(MINT);
+    expect(key(4)).toBe('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
+
+    const signature = raw.subarray(1, 65);
+    const message = raw.subarray(65);
+    expect(ed25519.verify(signature, message, FROM_PUBKEY)).toBe(true);
   });
 });
 
@@ -272,8 +338,8 @@ describe('Solana dapp transaction signing', () => {
     expect(parsed.feePayerIndex).toBe(0);
     expect(parsed.numRequiredSignatures).toBe(1);
     expect(parsed.accountKeys[0]).toBe(FROM_ADDRESS);
-    expect(parsed.accountKeys[1]).toBe(base58.encode(new Uint8Array(32))); // SystemProgram
-    expect(parsed.accountKeys[2]).toBe(TO_ADDRESS);
+    expect(parsed.accountKeys[1]).toBe(TO_ADDRESS);
+    expect(parsed.accountKeys[2]).toBe(base58.encode(new Uint8Array(32))); // SystemProgram
     expect(parsed.message.length).toBeGreaterThan(64);
   });
 
@@ -283,10 +349,11 @@ describe('Solana dapp transaction signing', () => {
     expect(result.signature).toBeTruthy();
     expect(result.signedTransaction).toBeTruthy();
 
-    // The returned signature must verify against the parsed message.
+    // The returned signature must verify against the raw parsed message (the
+    // network verifies plain Ed25519 over the serialized message bytes).
     const parsed = parseSolanaTransaction(result.signedTransaction);
     const sigBytes = base58.decode(result.signature);
-    expect(ed25519.verify(sigBytes, sha256(parsed.message), FROM_PUBKEY)).toBe(true);
+    expect(ed25519.verify(sigBytes, parsed.message, FROM_PUBKEY)).toBe(true);
   });
 
   it('rejects when the wallet is not a required signer', () => {

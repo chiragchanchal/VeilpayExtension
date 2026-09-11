@@ -57,7 +57,10 @@ function concatBytes(arrays: Uint8Array[]): Uint8Array {
  * Builds a serialized, unsigned (zero signature slot) SystemProgram transfer in
  * base58. Mirrors the wire format the wallet's own signer understands:
  *   [sig count=1][64-byte empty signature][message]
- *   message = [header 1,0,0][keys: feePayer, SystemProgram, to][blockhash][instructions]
+ *   message = [header 1,0,1][keys: feePayer, to, SystemProgram][blockhash][instructions]
+ *
+ * Keys follow Solana's weight order (writable signer, writable non-signer,
+ * read-only non-signer), so the SystemProgram is last and counted read-only.
  */
 export function buildDemoSolanaTransfer(
   feePayer: string,
@@ -76,12 +79,12 @@ export function buildDemoSolanaTransfer(
   }
 
   const systemProgram = new Uint8Array(32);
-  const header = new Uint8Array([1, 0, 0]);
-  const keys = concatBytes([encodeCompactU16(3), fromBytes, systemProgram, toBytes]);
+  const header = new Uint8Array([1, 0, 1]);
+  const keys = concatBytes([encodeCompactU16(3), fromBytes, toBytes, systemProgram]);
   const instructionData = concatBytes([new Uint8Array([2]), toLE64(lamports)]);
-  const accountIndices = new Uint8Array([0, 2]);
+  const accountIndices = new Uint8Array([0, 1]);
   const instruction = concatBytes([
-    new Uint8Array([1]), // programIdIndex = SystemProgram at index 1
+    new Uint8Array([2]), // programIdIndex = SystemProgram at index 2
     encodeCompactU16(2),
     accountIndices,
     encodeCompactU16(instructionData.length),

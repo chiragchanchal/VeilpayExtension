@@ -2112,7 +2112,8 @@ async function buildAndBroadcast(
  * The blockhash is required to build a valid transaction.
  */
 async function fetchSolanaBlockhash(): Promise<Uint8Array> {
-  const response = await fetch(TESTNET_ENDPOINTS.solana, {
+  const rpcUrl = await resolveRpcUrl('solana', TESTNET_ENDPOINTS.solana);
+  const response = await fetch(rpcUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({

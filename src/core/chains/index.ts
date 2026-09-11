@@ -340,7 +340,12 @@ class SolanaService implements ChainService {
     if (typeof signedTx !== 'string') {
       throw new Error('Solana transaction must be a base64 string.');
     }
-    const response = await this.call('sendTransaction', [signedTx]);
+    // `encoding` is REQUIRED: `sendTransaction` defaults to base58, so a base64
+    // payload sent without it fails deserialization on the node.
+    const response = await this.call('sendTransaction', [
+      signedTx,
+      { encoding: 'base64', preflightCommitment: 'confirmed' },
+    ]);
     if (typeof response !== 'string') {
       throw new Error(`sendTransaction returned non-string: ${typeof response}`);
     }

@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { ed25519 } from '@noble/curves/ed25519';
-import { sha256 } from '@noble/hashes/sha256';
 import { base58 } from '@scure/base';
 import {
   base58Decode,
@@ -40,13 +39,14 @@ describe('dapp-demo Solana transfer ↔ wallet signer integration', () => {
     const parsed = parseSolanaTransaction(serialized);
     expect(parsed.feePayerIndex).toBe(0);
     expect(parsed.accountKeys[0]).toBe(FEE_PAYER);
-    expect(parsed.accountKeys[1]).toBe(base58.encode(new Uint8Array(32))); // SystemProgram
-    expect(parsed.accountKeys[2]).toBe(TO);
+    expect(parsed.accountKeys[1]).toBe(TO);
+    expect(parsed.accountKeys[2]).toBe(base58.encode(new Uint8Array(32))); // SystemProgram
 
-    // And the wallet must be able to sign it as the fee payer.
+    // And the wallet must be able to sign it as the fee payer. The network
+    // verifies a plain Ed25519 signature over the serialized message.
     const signed = signSolanaTransaction(serialized, PRIVATE_KEY, FEE_PAYER);
     const sigBytes = base58.decode(signed.signature);
-    expect(ed25519.verify(sigBytes, sha256(parsed.message), ed25519.getPublicKey(PRIVATE_KEY))).toBe(true);
+    expect(ed25519.verify(sigBytes, parsed.message, ed25519.getPublicKey(PRIVATE_KEY))).toBe(true);
   });
 
   it('the demo transaction starts unsigned (zero signature slot)', () => {
