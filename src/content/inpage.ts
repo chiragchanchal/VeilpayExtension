@@ -14,6 +14,31 @@ import { isX402Challenge } from '@/core/x402/types';
 const CHANNEL = 'veilpay:v1';
 const TIMEOUT_MS = 30_000;
 
+/**
+ * Read-only EVM methods proxied to the background without approval. These are
+ * exactly the reads a dapp makes on connect (balance, block, nonce, calls); the
+ * background re-checks this against its own allowlist before touching the node.
+ */
+const READ_ONLY_METHODS = new Set([
+  'eth_blockNumber',
+  'eth_getBalance',
+  'eth_getCode',
+  'eth_getTransactionCount',
+  'eth_getTransactionByHash',
+  'eth_getTransactionReceipt',
+  'eth_getBlockByNumber',
+  'eth_getBlockByHash',
+  'eth_getLogs',
+  'eth_gasPrice',
+  'eth_estimateGas',
+  'eth_feeHistory',
+  'eth_maxPriorityFeePerGas',
+  'eth_call',
+  'eth_syncing',
+  'net_version',
+  'web3_clientVersion',
+]);
+
 interface Pending {
   resolve: (value: unknown) => void;
   reject: (reason: Error) => void;
@@ -152,8 +177,31 @@ const veilpay = Object.freeze({
           // chains. EIP-1193 error 4200: method not supported.
           throw eip1193Error(EIP1193.UNSUPPORTED_METHOD, 'wallet_addEthereumChain is not supported.');
 
+        case 'eth_signTypedData':
+        case 'eth_signTypedData_v3':
+        case 'eth_signTypedData_v4': {
+          const [address, data] = params as [string, unknown];
+          // Dapps pass typed data as either an object or a JSON string.
+          const typedData = typeof data === 'string' ? JSON.parse(data) : data;
+          return (
+            (await request('eth.signTypedData', {
+              origin: window.origin,
+              address,
+              typedData,
+            })) as { signature: string }
+          ).signature;
+        }
+
         default:
-          throw new Error(`Veilpay: unsupported method "${method}".`);
+          // Read-only passthrough for the calls dapps make on connect.
+          if (READ_ONLY_METHODS.has(method)) {
+            const { result } = (await request('eth.rpc', { method, params })) as { result: unknown };
+            return result;
+          }
+          throw eip1193Error(
+            EIP1193.UNSUPPORTED_METHOD,
+            `Veilpay: unsupported method "${method}".`,
+          );
       }
     },
 
@@ -273,4 +321,63 @@ Object.defineProperty(window, 'veilpay', {
   enumerable: false,
 });
 
+// ---------------------------------------------------------------------------
+// Wallet discovery
+//
+// Two mechanisms, because dapps use both:
+//
+//  1. EIP-6963 — the modern standard. Dapps dispatch `eip6963:requestProvider`
+//     and wallets answer with `eip6963:announceProvider`. This is what makes
+//     Veilpay appear as a selectable option alongside MetaMask, Phantom, etc.
+//     We re-announce on every request so a dapp that boots after us still sees
+//     the provider.
+//  2. `window.ethereum` — the legacy heuristic. If no other wallet claimed it we
+//     define it ourselves; if one did, we register into its `.providers` array
+//     (the multi-wallet convention) instead of clobbering it.
+// ---------------------------------------------------------------------------
+
+const PROVIDER_INFO = Object.freeze({
+  uuid: 'b1c2d3e4-f5a6-4b7c-8d9e-0a1b2c3d4e5f',
+  name: 'Veilpay',
+  icon:
+    "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 128 128'%3E%3Ccircle cx='64' cy='64' r='64' fill='%23F59E0B'/%3E%3Cpath d='M52 50 L64 74 L76 50 L84 50 L68 80 L60 80 L44 50 Z' fill='%23110B02'/%3E%3C/svg%3E",
+  rdns: 'io.veilpay',
+});
+
+function announceProvider(): void {
+  window.dispatchEvent(
+    new CustomEvent('eip6963:announceProvider', {
+      detail: Object.freeze({ info: PROVIDER_INFO, provider: veilpay.ethereum }),
+    }),
+  );
+}
+
+window.addEventListener('eip6963:requestProvider', announceProvider);
+announceProvider();
+
+try {
+  const target = window as unknown as { ethereum?: unknown };
+  const existing = target.ethereum as
+    | (Record<string, unknown> & { providers?: unknown[] })
+    | undefined;
+  if (existing === undefined) {
+    Object.defineProperty(window, 'ethereum', {
+      value: veilpay.ethereum,
+      writable: true,
+      configurable: true,
+      enumerable: true,
+    });
+  } else if (Array.isArray(existing.providers)) {
+    if (!existing.providers.includes(veilpay.ethereum)) {
+      existing.providers.push(veilpay.ethereum);
+    }
+  } else {
+    existing.providers = [existing, veilpay.ethereum];
+  }
+} catch {
+  // Another wallet locked the property. EIP-6963 above still announces us, so
+  // dapps that follow the standard can still discover Veilpay.
+}
+
 window.dispatchEvent(new Event('veilpay#initialized'));
+window.dispatchEvent(new Event('ethereum#initialized'));

@@ -24,6 +24,8 @@ const ALLOWED_FROM_PAGE = new Set([
   'eth.sendTransaction',
   'eth.switchChain',
   'personal.sign',
+  'eth.rpc',
+  'eth.signTypedData',
   'solana.connect',
   'solana.signTransaction',
   'solana.signMessage',

@@ -50,6 +50,12 @@ export interface ChainService {
   getSequence(address: string): Promise<bigint>;
 
   /**
+   * Read-only JSON-RPC passthrough for dapps (EVM only). The method allowlist
+   * is enforced by the caller, never here.
+   */
+  rpcCall?(method: string, params: unknown[]): Promise<unknown>;
+
+  /**
    * Optional live base-fee read. Implemented by Stellar so the wallet
    * auto-adjusts to network congestion; other chains fall back to `estimateGas`.
    */
@@ -202,6 +208,15 @@ class EvmService implements ChainService {
   async erc20BalanceOf(contract: string, owner: string): Promise<bigint> {
     const result = await this.ethCall(contract, erc20BalanceOfCalldata(owner));
     return decodeUint256(result);
+  }
+
+  /**
+   * Read-only JSON-RPC passthrough for the injected provider. Thin wrapper over
+   * `call`, which already applies endpoint fallback and error surfacing; the
+   * method allowlist lives in the background handler.
+   */
+  async rpcCall(method: string, params: unknown[]): Promise<unknown> {
+    return this.call(method, params);
   }
 
   /** Runs a read-only `eth_call` against a contract and returns the raw hex result. */

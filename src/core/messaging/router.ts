@@ -298,6 +298,18 @@ export async function dispatch(
           ok: true,
           data: await handlers['personal.sign'](request.payload, ctx),
         };
+      case 'eth.rpc':
+        return {
+          id: request.id,
+          ok: true,
+          data: await handlers['eth.rpc'](request.payload, ctx),
+        };
+      case 'eth.signTypedData':
+        return {
+          id: request.id,
+          ok: true,
+          data: await handlers['eth.signTypedData'](request.payload, ctx),
+        };
       case 'permissions.list':
         return {
           id: request.id,

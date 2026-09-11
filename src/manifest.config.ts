@@ -37,8 +37,11 @@ export default defineManifest({
 
   content_scripts: [
     {
-      // Narrow by design. Broadened only per-origin, at user request, via activeTab.
-      matches: ['http://localhost/*', 'http://127.0.0.1/*'],
+      // Injected everywhere so dapps (Uniswap, Aave, any site) can discover
+      // Veilpay through EIP-6963 and the injected `window.ethereum` provider.
+      // The shim itself holds no secrets; every privileged action still requires
+      // an explicit per-origin grant and a user approval in the wallet UI.
+      matches: ['http://*/*', 'https://*/*'],
       js: ['src/content/index.ts'],
       run_at: 'document_start',
       all_frames: false,
@@ -49,7 +52,7 @@ export default defineManifest({
     {
       // The page-world provider shim. Injected by the content script.
       resources: ['src/content/inpage.ts', 'assets/*'],
-      matches: ['http://localhost/*', 'http://127.0.0.1/*'],
+      matches: ['http://*/*', 'https://*/*'],
     },
   ],
 

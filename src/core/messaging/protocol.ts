@@ -53,6 +53,8 @@ export const RequestKind = z.enum([
   'eth.sendTransaction',
   'eth.switchChain',
   'personal.sign',
+  'eth.rpc',
+  'eth.signTypedData',
   'permissions.list',
   'permissions.grant',
   'permissions.revoke',
@@ -452,6 +454,39 @@ export const PersonalSignRequest = baseEnvelope.extend({
   }),
 });
 
+/**
+ * Read-only EVM JSON-RPC passthrough for dapps.
+ *
+ * Dapps read balances, nonces, blocks, and call contracts through the injected
+ * provider the moment they connect. The method is checked against an allowlist
+ * in the background before it reaches the node, so this cannot be used to sign
+ * or broadcast anything — only to read.
+ */
+export const EthRpcRequest = baseEnvelope.extend({
+  kind: z.literal('eth.rpc'),
+  payload: z.object({
+    method: z.string().min(1),
+    params: z.array(z.unknown()).default([]),
+  }),
+});
+
+/**
+ * EIP-712 typed-data signing (`eth_signTypedData_v4` in the provider).
+ *
+ * `typedData` is the dapp-supplied `{ types, domain, primaryType, message }`
+ * object, forwarded verbatim so the user can review it and the background can
+ * hash it per EIP-712. It must be JSON-serializable, which the message bus
+ * already guarantees.
+ */
+export const EthSignTypedDataRequest = baseEnvelope.extend({
+  kind: z.literal('eth.signTypedData'),
+  payload: z.object({
+    origin: z.string().optional(),
+    address: z.string(),
+    typedData: z.unknown(),
+  }),
+});
+
 export const EthSwitchChainRequest = baseEnvelope.extend({
   kind: z.literal('eth.switchChain'),
   payload: z.object({
@@ -744,6 +779,8 @@ export const Request = z.discriminatedUnion('kind', [
   EthSendTransactionRequest,
   EthSwitchChainRequest,
   PersonalSignRequest,
+  EthRpcRequest,
+  EthSignTypedDataRequest,
   PermissionsListRequest,
   PermissionsGrantRequest,
   PermissionsRevokeRequest,
@@ -948,6 +985,10 @@ export interface ResponseData {
   'eth.switchChain': { chainId: string };
   /** Signature as hex string. */
   'personal.sign': { signature: string };
+  /** Result of a read-only EVM RPC passthrough (JSON-serializable). */
+  'eth.rpc': { result: unknown };
+  /** EIP-712 signature (65-byte `r || s || v` hex) for typed data. */
+  'eth.signTypedData': { signature: string };
   'permissions.list': Array<{ origin: string; addresses: string[]; createdAt: number; lastUsedAt: number }>;
   'permissions.grant': { ok: boolean };
   'permissions.revoke': { ok: boolean };

@@ -43,9 +43,7 @@ export class WalletConnectClient {
     if (this.initialized || this.client !== null) return;
 
     const storage = new ChromeStorageAdapter('wc:');
-    // TODO: replace with your own project ID from WalletConnect Cloud.
-    // This is a public demo ID; it will work for development but rate-limited.
-    const projectId = '44d6aafe0a0f30d7505576cecdbdda8b';
+    const projectId = 'f70c43f1c427d9450b0e003b5566972c';
 
     this.client = await SignClient.init({
       projectId,

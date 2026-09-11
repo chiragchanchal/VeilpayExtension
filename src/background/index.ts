@@ -18,6 +18,7 @@ import {
   signPersonalMessage,
   type UnsignedEvmTransaction,
 } from '@/core/chains/evm/transaction';
+import { signTypedData, type TypedData } from '@/core/chains/evm/eip712';
 import {
   deriveAssociatedTokenAddress,
   parseSolanaTransaction,
@@ -111,6 +112,34 @@ import { openApprovalSurface } from '@/background/approval-surface';
 
 const IDLE_ALARM = 'veilpay:idle-check';
 const ZK_CAPABILITY_KEY = 'spike:zk-capability';
+
+/**
+ * Read-only EVM methods the injected provider may proxy to the node.
+ *
+ * Everything here is a pure read: balances, blocks, receipts, gas prices,
+ * `eth_call`, and logs. Nothing here can move funds or reveal key material, so
+ * it is safe to allow from any page without approval.
+ */
+const ALLOWED_EVM_READS = new Set([
+  'eth_blockNumber',
+  'eth_chainId',
+  'eth_getBalance',
+  'eth_getCode',
+  'eth_getTransactionCount',
+  'eth_getTransactionByHash',
+  'eth_getTransactionReceipt',
+  'eth_getBlockByNumber',
+  'eth_getBlockByHash',
+  'eth_getLogs',
+  'eth_gasPrice',
+  'eth_estimateGas',
+  'eth_feeHistory',
+  'eth_maxPriorityFeePerGas',
+  'eth_call',
+  'eth_syncing',
+  'net_version',
+  'web3_clientVersion',
+]);
 
 const handlers: HandlerMap = {
   ping: async (payload) => ({
@@ -661,6 +690,84 @@ const handlers: HandlerMap = {
     return vault.withAccount('evm', accountIndex, async (account) => {
       const message = hexToBytesStrict(payload.message);
       const { signature, from } = signPersonalMessage(message, account.privateKey);
+      if (from.toLowerCase() !== account.address.toLowerCase()) {
+        throw new Error('Signer address does not match the derived account.');
+      }
+      return { signature };
+    });
+  },
+
+  /**
+   * Read-only EVM JSON-RPC passthrough for dapps.
+   *
+   * Dapps call `eth_getBalance`, `eth_blockNumber`, `eth_call`, `eth_getCode`,
+   * etc. the moment they connect. Those are safe to proxy from the SW (it has
+   * host permissions); they never sign or broadcast. Only a strict allowlist is
+   * forwarded so the page cannot trick the wallet into calling anything else.
+   */
+  'eth.rpc': async (payload) => {
+    if (!ALLOWED_EVM_READS.has(payload.method)) {
+      throw new ProtocolError('UNKNOWN_KIND', `RPC method "${payload.method}" is not allowed.`);
+    }
+    const service = createChainService('evm');
+    if (typeof service.rpcCall !== 'function') {
+      throw new ProtocolError('INTERNAL', 'EVM read passthrough is unavailable.');
+    }
+    const result = await service.rpcCall(payload.method, payload.params);
+    return { result };
+  },
+
+  /**
+   * EIP-712 typed-data signing (`eth_signTypedData_v4`).
+   *
+   * Mirrors `personal.sign`: the origin must be approved, the address must be a
+   * wallet account, the user approves in the popup, then the background hashes
+   * per EIP-712 and signs inside `withAccount`.
+   */
+  'eth.signTypedData': async (payload, ctx) => {
+    const origin = ctx.pageOrigin;
+    if (origin === null) {
+      throw new ProtocolError('ORIGIN_DENIED', 'Could not verify the requesting origin.');
+    }
+    const approved = await getApprovedAddresses(origin);
+    if (approved.length === 0) {
+      throw new ProtocolError('ORIGIN_DENIED', 'No accounts approved for this origin.');
+    }
+    if (!approved.some((addr) => addr.toLowerCase() === payload.address.toLowerCase())) {
+      throw new ProtocolError('ORIGIN_DENIED', 'Signing address is not approved for this origin.');
+    }
+    const accountIndex = await findEvmAccountIndex(payload.address);
+    if (accountIndex === null) {
+      throw new ProtocolError('BAD_REQUEST', 'Signing address is not a wallet account.');
+    }
+
+    const typedData = payload.typedData as TypedData;
+    const id = crypto.randomUUID();
+    await setPendingApproval({
+      id,
+      kind: 'sign',
+      origin,
+      address: payload.address,
+      message: JSON.stringify({ primaryType: typedData?.primaryType ?? 'TypedData' }),
+      createdAt: Date.now(),
+    });
+    void openApprovalSurface();
+
+    let decision;
+    try {
+      decision = await waitForApproval(id);
+    } catch (cause) {
+      if (cause instanceof VaultLockedApprovalError) {
+        throw new ProtocolError('VAULT_LOCKED', cause.message);
+      }
+      throw cause;
+    }
+    if (decision === 'deny') {
+      throw new ProtocolError('USER_REJECTED', 'User rejected the signature request.');
+    }
+
+    return vault.withAccount('evm', accountIndex, async (account) => {
+      const { signature, from } = signTypedData(typedData, account.privateKey);
       if (from.toLowerCase() !== account.address.toLowerCase()) {
         throw new Error('Signer address does not match the derived account.');
       }
