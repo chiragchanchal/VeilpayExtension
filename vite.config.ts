@@ -44,9 +44,15 @@ export default defineConfig({
     sourcemap: false,
     rollupOptions: {
       // popup / options / sidepanel are discovered through the manifest by crxjs.
-      // The offscreen document is created at runtime, so it needs a declared entry.
+      // The offscreen document and the page-world provider shim are created /
+      // injected at runtime, so they need declared entries.
+      //
+      // The shim is built to `assets/inpage.js`: the content script injects it by
+      // URL, and a real `.js` extension is what lets Chrome serve it with a
+      // JavaScript MIME type instead of octet-stream.
       input: {
         offscreen: 'offscreen.html',
+        inpage: 'src/content/inpage.ts',
       },
       output: {
         entryFileNames: 'assets/[name].js',

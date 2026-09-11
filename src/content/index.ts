@@ -44,7 +44,11 @@ interface PageEnvelope {
 function injectPageShim(): void {
   const script = document.createElement('script');
   script.type = 'module';
-  script.src = chrome.runtime.getURL('src/content/inpage.ts');
+  // The BUNDLED shim, emitted as `assets/inpage.js` (see vite.config.ts). The
+  // raw `.ts` source must never be referenced: Chrome has no MIME mapping for
+  // `.ts`, serves it as `application/octet-stream`, and a module script refuses
+  // to execute a non-JavaScript MIME type ("strict MIME type checking").
+  script.src = chrome.runtime.getURL('assets/inpage.js');
   script.dataset.veilpay = 'shim';
   script.addEventListener('load', () => script.remove());
   (document.head ?? document.documentElement).appendChild(script);

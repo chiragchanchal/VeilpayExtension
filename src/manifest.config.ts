@@ -50,8 +50,10 @@ export default defineManifest({
 
   web_accessible_resources: [
     {
-      // The page-world provider shim. Injected by the content script.
-      resources: ['src/content/inpage.ts', 'assets/*'],
+      // Only the bundled artifacts. Listing the `.ts` source here made Vite copy
+      // the raw file into the package, and injecting it failed with a MIME error
+      // (Chrome serves `.ts` as octet-stream, which module scripts reject).
+      resources: ['assets/*'],
       matches: ['http://*/*', 'https://*/*'],
     },
   ],
