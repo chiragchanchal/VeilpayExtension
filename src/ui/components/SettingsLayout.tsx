@@ -8,6 +8,7 @@ import { SecuritySetup } from '@/ui/components/SecuritySetup';
 import { listPermissions, revokeOrigin, type OriginPermission } from '@/core/permissions';
 import { getCustomNetworks, addCustomNetwork, removeCustomNetwork, type CustomNetwork } from '@/core/networks';
 import { AddressBookView } from '@/ui/components/AddressBookView';
+import { AgentBridgeSettings } from '@/ui/components/AgentBridgeSettings';
 import { TransactionHistoryView } from '@/ui/components/TransactionHistoryView';
 import { SessionManagementView } from '@/ui/components/SessionManagementView';
 import { AuditView } from '@/ui/components/AuditView';
@@ -20,7 +21,7 @@ import {
 } from '@/core/vap/grant';
 import { appendAudit } from '@/core/vap/audit';
 
-type SettingsTab = 'general' | 'security' | 'networks' | 'permissions' | 'vap' | 'addressbook' | 'transactions' | 'session' | 'audit' | 'about';
+type SettingsTab = 'general' | 'security' | 'networks' | 'permissions' | 'vap' | 'agent' | 'addressbook' | 'transactions' | 'session' | 'audit' | 'about';
 
 /**
  * Settings layout with sidebar navigation.
@@ -60,6 +61,7 @@ export function SettingsLayout({ onClose }: { onClose?: () => void }) {
     { key: 'networks', label: t('settings.networks') },
     { key: 'permissions', label: t('settings.permissions') },
     { key: 'vap', label: t('settings.vapGrants') },
+    { key: 'agent', label: 'Agent' },
     { key: 'addressbook', label: t('settings.addressBook') },
     { key: 'transactions', label: t('settings.transactions') },
     { key: 'session', label: t('settings.session') },
@@ -111,6 +113,7 @@ export function SettingsLayout({ onClose }: { onClose?: () => void }) {
           />
         )}
         {tab === 'vap' && <VapGrantsSection />}
+        {tab === 'agent' && <AgentBridgeSettings />}
         {tab === 'addressbook' && <AddressBookView />}
         {tab === 'transactions' && <TransactionHistoryView />}
         {tab === 'session' && <SessionManagementView />}

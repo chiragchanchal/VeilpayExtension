@@ -6,17 +6,23 @@ import { Button } from '@/ui/components/Button';
 import { Card } from '@/ui/components/Card';
 import type { PendingApproval } from '@/ui/store/useWallet';
 
-/** Converts a wei decimal string to a displayable ETH figure (4 decimals). */
-function formatEth(wei: string | undefined): string {
-  if (wei === undefined) return '0 ETH';
+/**
+ * Converts a base-unit value to a display figure.
+ *
+ * Defaults to ETH at 18 decimals for dapp requests, which carry no metadata;
+ * agent payments carry an explicit symbol and decimals.
+ */
+function formatAmount(value: string | undefined, symbol = 'ETH', decimals = 18): string {
+  if (value === undefined) return `0 ${symbol}`;
   try {
-    const value = BigInt(wei);
-    const whole = value / 10n ** 18n;
-    const fraction = value % 10n ** 18n;
-    const frac = fraction.toString().padStart(18, '0').slice(0, 4);
-    return `${whole}.${frac} ETH`;
+    const raw = BigInt(value);
+    const scale = 10n ** BigInt(decimals);
+    const whole = raw / scale;
+    const fraction = raw % scale;
+    const frac = fraction.toString().padStart(decimals, '0').slice(0, 4);
+    return `${whole}.${frac} ${symbol}`;
   } catch {
-    return `${wei} wei`;
+    return `${value} ${symbol}`;
   }
 }
 
@@ -90,7 +96,11 @@ export function TransactionApproval({
             <div className="flex flex-col divide-y divide-surface-700/70">
               <DetailRow label={t('approval.from')} value={approval.address} />
               <DetailRow label={t('approval.to')} value={approval.to ?? '—'} />
-              <DetailRow label={t('approval.amount')} value={formatEth(approval.value)} mono={false} />
+              <DetailRow
+                label={t('approval.amount')}
+                value={formatAmount(approval.value, approval.symbol, approval.decimals)}
+                mono={false}
+              />
               {approval.data !== undefined && approval.data.length > 2 && (
                 <DetailRow
                   label={t('approval.calldata')}

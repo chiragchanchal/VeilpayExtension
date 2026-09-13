@@ -62,6 +62,10 @@ export interface PendingApproval {
   value?: string;
   data?: string;
   message?: string;
+  /** Display symbol for `value`; absent means ETH. */
+  symbol?: string;
+  /** Decimals for `value`; absent means 18. */
+  decimals?: number;
   createdAt: number;
 }
 

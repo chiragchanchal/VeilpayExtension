@@ -100,6 +100,13 @@ import {
   clearPendingWcRequest,
   initWalletConnect,
 } from '@/background/walletconnect';
+import {
+  loadAgentBridgeConfig,
+  saveAgentBridgeConfig,
+  clearAgentBridgeConfig,
+  startAgentBridgeLoop,
+  type AgentBridgeLoop,
+} from '@/background/agent-bridge';
 import { openApprovalSurface } from '@/background/approval-surface';
 
 /**
@@ -1511,6 +1518,31 @@ const handlers: HandlerMap = {
     await clearPendingWcRequest();
     return { ok: true };
   },
+
+  'agent.status': async () => agentBridgeStatus(),
+
+  /**
+   * Pairs the agent bridge. Privileged (router), because the stored token is a
+   * standing spending authority: anything that can read it may spend within the
+   * user's grant caps without a per-payment prompt.
+   */
+  'agent.configure': async (payload) => {
+    await saveAgentBridgeConfig({
+      port: payload.port,
+      token: payload.token,
+      pairedAt: Date.now(),
+    });
+    await restartAgentBridge();
+    void appendAudit('agent.paired', { port: payload.port });
+    return { ok: true };
+  },
+
+  'agent.disable': async () => {
+    stopAgentBridge();
+    await clearAgentBridgeConfig();
+    void appendAudit('agent.unpaired', {});
+    return { ok: true };
+  },
 };
 
 /** Decimal places used to convert human-readable token amounts to base units. */
@@ -2144,6 +2176,238 @@ async function fetchSolanaBlockhash(): Promise<Uint8Array> {
   return base58.decode(blockhash);
 }
 
+// ---------------------------------------------------------------------------
+// Agent bridge (MCP)
+// ---------------------------------------------------------------------------
+
+/**
+ * Grants are keyed by client id. This is deliberately not an origin: the bridge
+ * is a local process, not a page, and giving it its own key means revoking it
+ * cannot affect any website's access.
+ */
+const AGENT_CLIENT_ID = 'mcp:veilpay';
+
+let agentLoop: AgentBridgeLoop | null = null;
+
+function stopAgentBridge(): void {
+  agentLoop?.stop();
+  agentLoop = null;
+}
+
+async function agentBridgeStatus() {
+  const config = await loadAgentBridgeConfig();
+  return {
+    enabled: config !== null,
+    port: config?.port ?? null,
+    paired: config !== null,
+    connected: agentLoop?.connected() ?? false,
+    lastPollAt: agentLoop?.lastPollAt() ?? null,
+  };
+}
+
+/** Starts the poll loop if the user has paired. Replaces any running loop. */
+async function restartAgentBridge(): Promise<void> {
+  stopAgentBridge();
+  const config = await loadAgentBridgeConfig();
+  if (config === null) return;
+  agentLoop = startAgentBridgeLoop(config, (request) =>
+    executeAgentTool(request.tool, request.args),
+  );
+}
+
+function asChain(value: unknown): ChainId {
+  if (value === 'evm' || value === 'solana' || value === 'stellar') return value;
+  throw new ProtocolError('BAD_REQUEST', 'Unsupported chain.');
+}
+
+/** Dispatches one bridge tool call. Throws to report a failure to the agent. */
+async function executeAgentTool(
+  tool: string,
+  args: Record<string, unknown>,
+): Promise<unknown> {
+  switch (tool) {
+    case 'status': {
+      const state = await vault.getState();
+      return { unlocked: state === 'unlocked', testnetOnly: true };
+    }
+    case 'accounts': {
+      const accounts = await vault.getAllAccountAddresses(0);
+      return accounts.map((account) => ({ chain: account.chain, address: account.address }));
+    }
+    case 'balance': {
+      const chain = asChain(args.chain);
+      const address =
+        typeof args.address === 'string' && args.address.length > 0
+          ? args.address
+          : (await vault.getAccountAddress(chain, 0)).address;
+      const service = createChainService(
+        chain,
+        await resolveRpcUrl(chain, TESTNET_ENDPOINTS[chain]),
+      );
+      const balance = await service.getBalance(address);
+      return {
+        chain,
+        address,
+        balance: balance.toString(),
+        decimals: CHAIN_DECIMALS[chain],
+        symbol: NATIVE_SYMBOL[chain],
+      };
+    }
+    case 'grants.list':
+      return listGrants();
+    case 'grants.revoke': {
+      if (typeof args.id !== 'string' || args.id.length === 0) {
+        throw new ProtocolError('BAD_REQUEST', 'A grant id is required.');
+      }
+      await revokeGrant(args.id);
+      return { ok: true };
+    }
+    case 'send':
+      return executeAgentSend(args);
+    default:
+      throw new ProtocolError('BAD_REQUEST', `Unknown agent tool "${tool}".`);
+  }
+}
+
+/**
+ * Settles an agent-initiated native transfer.
+ *
+ * The authorisation model is the important part: an agent may act autonomously
+ * only inside a grant's caps. Without a grant, or above the approval threshold,
+ * the payment parks and a human decides. That is what stops a prompt-injected
+ * agent from draining the wallet — the LLM asks, the wallet authorises.
+ */
+async function executeAgentSend(args: Record<string, unknown>): Promise<unknown> {
+  const chain = asChain(args.chain);
+  const to = args.to;
+  const amountText = args.amount;
+
+  if (typeof to !== 'string' || to.length === 0) {
+    throw new ProtocolError('BAD_REQUEST', 'A recipient address is required.');
+  }
+  if (typeof amountText !== 'string' || amountText.length === 0) {
+    throw new ProtocolError('BAD_REQUEST', 'An amount is required.');
+  }
+  if ((await vault.getState()) !== 'unlocked') {
+    throw new ProtocolError('VAULT_LOCKED', 'Unlock Veilpay before sending.');
+  }
+
+  const account = (await vault.getAccountAddress(chain, 0)).address;
+  const decimals = CHAIN_DECIMALS[chain];
+  const amount = parseTransferAmount(amountText, chain, 'agent.send');
+  if (amount <= 0n) {
+    throw new ProtocolError('BAD_REQUEST', 'Amount must be greater than zero.');
+  }
+
+  const service = createChainService(
+    chain,
+    await resolveRpcUrl(chain, TESTNET_ENDPOINTS[chain]),
+  );
+  const spendable = await service.getBalance(account);
+
+  const broadcast = () =>
+    buildAndBroadcast(
+      { chain, index: 0, to, amount: amountText },
+      amount,
+      { kind: 'native' },
+      decimals,
+      spendable,
+    );
+
+  const grant = await getActiveGrantByOrigin(AGENT_CLIENT_ID);
+  if (grant !== null) {
+    const window = await loadSpendWindow(grant);
+    const decision = requiresApproval(
+      grant,
+      { type: 'native.transfer', amount, chain, recipient: to },
+      BigInt(window.amountSpent),
+    );
+
+    if (decision.action === 'deny') {
+      void appendAudit('op.denied', {
+        clientId: AGENT_CLIENT_ID,
+        chain,
+        amount: amount.toString(),
+        recipient: to,
+        grantId: grant.id,
+        reason: decision.reason,
+      });
+      throw new ProtocolError(
+        'BAD_REQUEST',
+        `Denied by the spending grant (${decision.reason}).`,
+      );
+    }
+
+    if (decision.action === 'auto') {
+      const result = await broadcast();
+      await recordSpend(grant, amount);
+      void appendAudit('op.settled', {
+        clientId: AGENT_CLIENT_ID,
+        chain,
+        amount: amount.toString(),
+        recipient: to,
+        grantId: grant.id,
+        approvedBy: 'grant',
+        hash: result.hash,
+      });
+      return { hash: result.hash, chain, to, amount: amountText };
+    }
+    // 'required' means above the threshold — fall through to the human prompt.
+  }
+
+  if (!allowPrompt(AGENT_CLIENT_ID)) {
+    throw new ProtocolError(
+      'PROMPT_RATE_LIMITED',
+      'Too many approval requests. Wait a minute and try again.',
+    );
+  }
+
+  const id = crypto.randomUUID();
+  await setPendingApproval({
+    id,
+    kind: 'tx',
+    origin: AGENT_CLIENT_ID,
+    address: account,
+    to,
+    value: amount.toString(),
+    symbol: NATIVE_SYMBOL[chain],
+    decimals,
+    createdAt: Date.now(),
+  });
+  void openApprovalSurface();
+
+  let decision;
+  try {
+    decision = await waitForApproval(id);
+  } catch (cause) {
+    if (cause instanceof VaultLockedApprovalError) {
+      throw new ProtocolError('VAULT_LOCKED', cause.message);
+    }
+    throw cause;
+  }
+  if (decision === 'deny') {
+    throw new ProtocolError('USER_REJECTED', 'The user declined the payment.');
+  }
+
+  const result = await broadcast();
+  void appendAudit('op.approved', {
+    clientId: AGENT_CLIENT_ID,
+    chain,
+    amount: amount.toString(),
+    recipient: to,
+    approvedBy: 'user',
+  });
+  void appendAudit('op.settled', {
+    clientId: AGENT_CLIENT_ID,
+    chain,
+    amount: amount.toString(),
+    recipient: to,
+    approvedBy: 'user',
+    hash: result.hash,
+  });
+  return { hash: result.hash, chain, to, amount: amountText };
+}
+
 const INTERNAL_CHANNEL = 'veilpay:internal';
 
 interface InternalMessage {
@@ -2258,6 +2522,7 @@ chrome.runtime.onInstalled.addListener(() => {
   ensureIdleAlarm();
   void runZkSpikeOnce();
   void initWalletConnect();
+  void restartAgentBridge();
   buildContextMenu();
 });
 
@@ -2268,6 +2533,7 @@ chrome.runtime.onStartup.addListener(() => {
   // without this the D3 question would never be measured again.
   void runZkSpikeOnce();
   void initWalletConnect();
+  void restartAgentBridge();
   buildContextMenu();
 });
 

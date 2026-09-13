@@ -418,6 +418,24 @@ export async function dispatch(
           ok: true,
           data: await handlers['wc.request.resolve'](request.payload, ctx),
         };
+      case 'agent.status':
+        return {
+          id: request.id,
+          ok: true,
+          data: await handlers['agent.status'](request.payload, ctx),
+        };
+      case 'agent.configure':
+        return {
+          id: request.id,
+          ok: true,
+          data: await handlers['agent.configure'](request.payload, ctx),
+        };
+      case 'agent.disable':
+        return {
+          id: request.id,
+          ok: true,
+          data: await handlers['agent.disable'](request.payload, ctx),
+        };
       case 'tx.pending':
         return {
           id: request.id,

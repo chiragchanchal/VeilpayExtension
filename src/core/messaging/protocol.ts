@@ -83,6 +83,9 @@ export const RequestKind = z.enum([
   'wc.session.disconnect',
   'wc.request.pending',
   'wc.request.resolve',
+  'agent.status',
+  'agent.configure',
+  'agent.disable',
 ]);
 export type RequestKind = z.infer<typeof RequestKind>;
 
@@ -149,6 +152,12 @@ export const PRIVILEGED_KINDS: readonly RequestKind[] = [
   // addresses the wallet holds. Restricted to our own surfaces so a compromised
   // page cannot harvest them.
   'accounts.list',
+  // Pairing the agent bridge stores a token that lets a local process spend
+  // within the user's grant caps. That is a standing spending authority, so it
+  // is privileged exactly like `vap.grant.resolve` — only our own UI may set it,
+  // never a page, content script, or the offscreen document.
+  'agent.configure',
+  'agent.disable',
 ] as const;
 
 export function isPrivilegedKind(kind: RequestKind): boolean {
@@ -337,9 +346,9 @@ export const GrantCaps = z.object({
   windowSeconds: z.number().int().min(60).max(31_536_000),
   /** Above this amount, force user approval even in autonomous mode. */
   approvalThreshold: Decimal,
-  /** Operation types this grant permits. x402.pay is the only op today. */
-  allowedOps: z.array(z.literal('x402.pay')).min(1),
-  /** Chains payments may settle on. EVM (Sepolia) only today. */
+  /** Operation types this grant permits. */
+  allowedOps: z.array(z.enum(['x402.pay', 'native.transfer'])).min(1),
+  /** Chains payments may settle on. */
   allowedChains: z.array(ChainId).min(1),
   /** Allowed recipients; empty = any (discouraged but simple). */
   allowlist: z.array(z.string()),
@@ -754,6 +763,33 @@ export const WcRequestResolveRequest = baseEnvelope.extend({
   }),
 });
 
+/**
+ * Agent bridge — lets an MCP server (Claude, etc.) request payments.
+ *
+ * The extension cannot be reached inbound, so it long-polls a localhost bridge
+ * the MCP server exposes. These kinds manage that pairing; the payments
+ * themselves flow through the same grant and approval machinery as any dapp.
+ */
+export const AgentStatusRequest = baseEnvelope.extend({
+  kind: z.literal('agent.status'),
+  payload: z.object({}),
+});
+
+export const AgentConfigureRequest = baseEnvelope.extend({
+  kind: z.literal('agent.configure'),
+  payload: z.object({
+    port: z.number().int().positive().max(65535),
+    /** The pairing token printed by the MCP server. Bounded to avoid storing a
+     *  page-sized blob. */
+    token: z.string().min(16).max(256),
+  }),
+});
+
+export const AgentDisableRequest = baseEnvelope.extend({
+  kind: z.literal('agent.disable'),
+  payload: z.object({}),
+});
+
 export const Request = z.discriminatedUnion('kind', [
   PingRequest,
   VaultStatusRequest,
@@ -809,6 +845,9 @@ export const Request = z.discriminatedUnion('kind', [
   WcSessionDisconnectRequest,
   WcRequestPendingRequest,
   WcRequestResolveRequest,
+  AgentStatusRequest,
+  AgentConfigureRequest,
+  AgentDisableRequest,
 ]);
 export type Request = z.infer<typeof Request>;
 
@@ -1015,6 +1054,10 @@ export interface ResponseData {
     data?: string;
     /** For kind 'sign': the hex-encoded message to sign. */
     message?: string;
+    /** Display symbol for `value` (e.g. "SOL"); absent means ETH. */
+    symbol?: string;
+    /** Decimals for `value`; absent means 18. */
+    decimals?: number;
     /** When the request was registered, so the UI can age it out. */
     createdAt: number;
   } | null;
@@ -1093,6 +1136,20 @@ export interface ResponseData {
     createdAt: number;
   } | null;
   'wc.request.resolve': { ok: boolean };
+  /** Agent bridge pairing state. Never returns the token itself. */
+  'agent.status': {
+    /** True once a token and port are stored. */
+    enabled: boolean;
+    port: number | null;
+    /** Mirrors `enabled`, for surfacing without leaking the secret. */
+    paired: boolean;
+    /** Whether the MCP server answered the most recent poll. */
+    connected: boolean;
+    /** Epoch ms of the last successful poll, or null. */
+    lastPollAt: number | null;
+  };
+  'agent.configure': { ok: boolean };
+  'agent.disable': { ok: boolean };
 }
 
 export function newId(): string {

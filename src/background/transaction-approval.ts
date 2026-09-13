@@ -12,6 +12,13 @@ export interface PendingApprovalRecord {
   value?: string;
   data?: string;
   message?: string;
+  /**
+   * Display metadata for `value`. Agent-initiated payments are not always
+   * EVM/wei, so the overlay must not assume 18 decimals and "ETH"; absent means
+   * exactly that, which keeps every existing dapp path unchanged.
+   */
+  symbol?: string;
+  decimals?: number;
   createdAt: number;
 }
 

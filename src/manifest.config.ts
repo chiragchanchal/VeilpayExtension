@@ -82,6 +82,9 @@ export default defineManifest({
     'https://horizon-testnet.stellar.org/*',
     'https://friendbot.stellar.org/*', // testnet faucet (Stellar SDF)
     'https://veilpay-qzz1.onrender.com/*', // transaction indexer backend
+    // The agent bridge. Loopback only, and every request carries a pairing
+    // token, so this grants no access to anything off this machine.
+    'http://127.0.0.1/*',
   ],
 
   content_security_policy: {

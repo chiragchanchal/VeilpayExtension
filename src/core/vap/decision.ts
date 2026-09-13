@@ -31,11 +31,14 @@ export type ApprovalDecision =
   | { action: 'required'; reason: ApprovalReason }
   | { action: 'deny'; reason: ApprovalReason };
 
-/** An operation submitted against a grant. Only x402.pay exists today. */
+/**
+ * An operation submitted against a grant. x402 payments and plain native
+ * transfers are the two the wallet can settle today.
+ */
 export interface VapOperation {
-  type: 'x402.pay';
+  type: 'x402.pay' | 'native.transfer';
   amount: bigint;
-  chain: 'evm';
+  chain: 'evm' | 'solana' | 'stellar';
   recipient: string;
 }
 
