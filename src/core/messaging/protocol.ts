@@ -1168,14 +1168,11 @@ export interface ResponseData {
     lastPollAt: number | null;
   };
   'agent.configure': { ok: boolean };
-  /** Relay registration: the code to enter on the AI-client side. */
+  /** Relay registration: the URL the user adds as a remote MCP server. */
   'agent.relay.register': {
-    code: string;
-    /** The URL the user adds as the remote MCP server. */
     mcpUrl: string;
-    /** The URL where the code is entered. */
-    pairUrl: string;
-    expiresAt: number;
+    /** Identifies this wallet; lives in the URL path, not a shared secret. */
+    walletId: string;
   };
   'agent.disable': { ok: boolean };
 }

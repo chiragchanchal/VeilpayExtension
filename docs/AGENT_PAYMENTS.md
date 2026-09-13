@@ -143,7 +143,8 @@ assumed to be curious, buggy, or even malicious. The design treats it as
 ### Iteration 8 — pairing without typing a token
 
 Device-authorisation flow, the same shape as logging a TV into a streaming
-service:
+service. Retained here for the local mode, where there is no public origin to
+run discovery against:
 
 1. Extension opens the relay and receives a **wallet id** and a short
    **pairing code** (`ABCD-1234`).
@@ -152,16 +153,49 @@ service:
 4. User types the code once. The relay binds the MCP session to that wallet's
    socket and issues an access token.
 
-After step 4 the connection is durable: Claude reconnects with its token, the
-extension reconnects with its wallet secret, and no one types anything again.
+### Iteration 9 — kill the code entirely with OAuth discovery
+
+The code in iteration 8 was still something to copy by hand, which is exactly the
+friction this feature is supposed to remove. It also forced a choice between a
+long-lived code and an awkward expiry.
+
+**Shipped instead:** the relay advertises standard OAuth metadata, so the MCP
+client discovers how to authenticate and runs the handshake itself. The wallet id
+lives in the MCP URL's **path** (`https://relay/mcp/<walletId>`), so the URL the
+user pastes already carries its identity and nothing else has to be typed. The
+user's only action is approving one consent page.
+
+Two details carry the security here:
+
+- **PKCE S256 is required.** Without it, an intercepted authorization code is
+  directly replayable. Codes are also single-use and expire in five minutes.
+- **The path only *names* the wallet, never authorises it.** An unauthenticated
+  call to `/mcp/<walletId>` is refused and answered with a `WWW-Authenticate`
+  header pointing at the metadata document, which is what makes the client start
+  OAuth rather than give up. Treating the id as a capability would have made the
+  URL itself the credential.
+
+### Iteration 10 — the button the user actually wanted
+
+The remaining step was "find the connector settings page in your AI client".
+The panel now shows a client choice (Claude / ChatGPT), copies the MCP URL to the
+clipboard the moment it is minted, and opens that client's connector page.
+
+**What is genuinely not possible:** pre-filling the connector. Neither vendor
+documents a URL parameter that adds a remote MCP server, so the last step is one
+paste. Anything claiming otherwise would be inventing behaviour they do not
+publish.
 
 ### What the user actually does
 
 1. Install the extension (already true).
-2. Click **Connect to Claude** in Settings → Agent. Get a code.
-3. Paste the relay URL into Claude once, and enter the code.
+2. Settings → Agent → pick Claude or ChatGPT → **Connect**.
+3. The panel opens that client's connector page with the MCP URL already on the
+   clipboard. Paste it.
+4. The client shows the relay's consent page. Approve it.
 
-That is the whole setup. No Node, no `npm`, no token to copy by hand.
+Done. No Node, no `npm`, no token to copy by hand, and nothing to repeat on
+reconnect.
 
 ### Honest limitation
 
@@ -220,14 +254,22 @@ or `204` on timeout (25 s).
 
 Relay:
 
-`GET /pair` — creates a wallet id and pairing code. Returns
-`{ walletId, code, expiresAt }`.
+`POST /wallet/register` — the extension registers. Returns `{ walletId, secret }`;
+the secret never leaves that pair.
 
-`WS /wallet?walletId=…&secret=…` — the extension's socket. Messages are
-`{ id, tool, args }` down and `{ id, ok, data?, error? }` up.
+`GET /next`, `POST /result` — the extension's authenticated long-poll
+(`x-veilpay-wallet` + `x-veilpay-secret`).
 
-`POST /mcp` — remote MCP (JSON-RPC) for the AI host, authenticated by the
-access token issued during pairing.
+`GET /.well-known/oauth-authorization-server`, `GET /.well-known/oauth-protected-resource`
+— discovery, so an MCP client drives the handshake without user instruction.
+
+`POST /register` — dynamic client registration.
+
+`GET /authorize`, `POST /authorize/approve`, `POST /token` — the consent page and
+the PKCE (S256, single-use code) exchange.
+
+`POST /mcp/<walletId>` — remote MCP. Requires a bearer token; the path only names
+the wallet, it does not authorise it.
 
 Tools on both: `status`, `accounts`, `balance`, `send`, `grants.list`,
 `grants.revoke`.

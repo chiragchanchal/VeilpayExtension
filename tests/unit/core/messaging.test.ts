@@ -106,10 +106,8 @@ function handlers(overrides: Partial<HandlerMap> = {}): HandlerMap {
     }),
     'agent.configure': async () => ({ ok: true }),
     'agent.relay.register': async () => ({
-      code: 'ABCD-1234',
-      mcpUrl: 'https://relay.example/mcp',
-      pairUrl: 'https://relay.example/pair',
-      expiresAt: 0,
+      mcpUrl: 'https://relay.example/mcp/wallet-1',
+      walletId: 'wallet-1',
     }),
     'agent.disable': async () => ({ ok: true }),
     'vault.create': async () => ({ state: 'unlocked' as const }),

@@ -16,22 +16,47 @@ interface AgentStatus {
   lastPollAt: number | null;
 }
 
+/**
+ * Where each client manages connected apps / MCP servers.
+ *
+ * These are ordinary settings URLs, not deep links: no vendor documents a
+ * "add this connector" URL, so the honest behaviour is to open the right page
+ * and put the server URL on the clipboard, ready to paste.
+ */
+const CLIENTS = {
+  claude: {
+    label: 'Claude',
+    settingsUrl: 'https://claude.ai/settings/connectors',
+    hint: 'Settings → Connectors → Add custom connector',
+  },
+  chatgpt: {
+    label: 'ChatGPT',
+    settingsUrl: 'https://chatgpt.com/#settings/Connectors',
+    hint: 'Settings → Connectors → Add MCP server',
+  },
+} as const;
+
+type ClientKey = keyof typeof CLIENTS;
+
 const DEFAULT_PORT = 8765;
 
 /**
- * Pairs the wallet with an AI client, two ways.
+ * Connects the wallet to an AI client.
  *
- * `relay` is the zero-install path: the user runs nothing, enters a code once,
- * and a hosted server routes requests. `local` runs the MCP server on this
- * machine, which avoids a third party seeing payment metadata but requires Node.
+ * Two paths, and the difference is who hosts the server. `relay` needs no
+ * install: the extension registers with a hosted server and the user pastes one
+ * URL. `local` runs the MCP server on this machine, which keeps payment
+ * metadata off a third party but requires Node.
  */
 export function AgentBridgeSettings() {
   const [status, setStatus] = useState<AgentStatus | null>(null);
   const [mode, setMode] = useState<'relay' | 'local'>('relay');
+  const [client, setClient] = useState<ClientKey>('claude');
   const [relayUrl, setRelayUrl] = useState('');
   const [port, setPort] = useState(String(DEFAULT_PORT));
   const [token, setToken] = useState('');
-  const [pairing, setPairing] = useState<{ code: string; mcpUrl: string } | null>(null);
+  const [mcpUrl, setMcpUrl] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -45,23 +70,33 @@ export function AgentBridgeSettings() {
 
   useEffect(() => {
     void refresh();
-    // Connection state is live, so poll it while the panel is open.
+    // Connection state is live, so poll it while this panel is open.
     const timer = window.setInterval(() => void refresh(), 5_000);
     return () => window.clearInterval(timer);
   }, [refresh]);
 
-  /** Requests access to the user-supplied relay origin, if not already granted. */
+  const copy = async (value: string) => {
+    await navigator.clipboard.writeText(value).catch(() => undefined);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2_000);
+  };
+
+  /**
+   * Requests access to the user-supplied relay origin.
+   *
+   * A relay is any https host, so granting every site up front would undo the
+   * minimal-permission design; the origin is requested here instead. This must
+   * run inside a click handler — Chrome requires a user gesture.
+   */
   const ensureRelayPermission = async (origin: string): Promise<boolean> => {
     const pattern = `${origin}/*`;
-    const has = await chrome.permissions.contains({ origins: [pattern] });
-    if (has) return true;
-    // Must be called from a user gesture, which a button click is.
+    if (await chrome.permissions.contains({ origins: [pattern] })) return true;
     return chrome.permissions.request({ origins: [pattern] });
   };
 
   const handleRelayConnect = async () => {
     setError(null);
-    setPairing(null);
+    setMcpUrl(null);
     const trimmed = relayUrl.trim().replace(/\/$/, '');
     if (!/^https?:\/\//.test(trimmed)) {
       setError('Enter the relay URL, including https://.');
@@ -70,14 +105,16 @@ export function AgentBridgeSettings() {
 
     setBusy(true);
     try {
-      // The relay is a user-supplied origin, so permission is requested at the
-      // moment of use rather than granted to every site up front.
       if (!(await ensureRelayPermission(new URL(trimmed).origin))) {
         setError('Permission for that relay was declined.');
         return;
       }
       const result = await send('agent.relay.register', { baseUrl: trimmed });
-      setPairing({ code: result.code, mcpUrl: result.mcpUrl });
+      setMcpUrl(result.mcpUrl);
+      // Put the URL on the clipboard immediately: the next step is pasting it
+      // into the client, and making the user select it by hand is the friction
+      // this path exists to remove.
+      await copy(result.mcpUrl);
       await refresh();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Could not reach the relay.');
@@ -118,144 +155,212 @@ export function AgentBridgeSettings() {
     setBusy(true);
     try {
       await send('agent.disable', {});
-      setPairing(null);
+      setMcpUrl(null);
       await refresh();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Could not unpair.');
+      setError(cause instanceof Error ? cause.message : 'Could not disconnect.');
     } finally {
       setBusy(false);
     }
   };
 
-  return (
-    <div className="flex flex-col gap-3">
-      <Card title="Agent bridge">
-        <div className="mb-3 flex items-center gap-2">
-          <span
-            className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 font-body text-[11px] font-medium ${
-              status?.connected
-                ? 'bg-success/15 text-success'
-                : status?.paired
-                  ? 'bg-warning/15 text-warning'
-                  : 'bg-surface-700 text-content-tertiary'
-            }`}
-          >
-            <span
-              aria-hidden
-              className={`h-1.5 w-1.5 rounded-full ${
-                status?.connected ? 'bg-success' : status?.paired ? 'bg-warning' : 'bg-content-tertiary'
-              }`}
-            />
-            {status?.connected
-              ? 'Connected'
-              : status?.paired
-                ? 'Waiting for the AI client'
-                : 'Not connected'}
-          </span>
-          {status?.endpoint !== null && status?.endpoint !== undefined && (
-            <span className="truncate font-mono text-[11px] text-content-tertiary">
-              {status.endpoint}
-            </span>
-          )}
-        </div>
+  const statusPill = (
+    <div className="mb-3 flex items-center gap-2">
+      <span
+        className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 font-body text-[11px] font-medium ${
+          status?.connected
+            ? 'bg-success/15 text-success'
+            : status?.paired
+              ? 'bg-warning/15 text-warning'
+              : 'bg-surface-700 text-content-tertiary'
+        }`}
+      >
+        <span
+          aria-hidden
+          className={`h-1.5 w-1.5 rounded-full ${
+            status?.connected ? 'bg-success' : status?.paired ? 'bg-warning' : 'bg-content-tertiary'
+          }`}
+        />
+        {status?.connected
+          ? 'Connected'
+          : status?.paired
+            ? 'Waiting for the AI client'
+            : 'Not connected'}
+      </span>
+      {status?.endpoint !== null && status?.endpoint !== undefined && (
+        <span className="truncate font-mono text-[11px] text-content-tertiary">
+          {status.endpoint}
+        </span>
+      )}
+    </div>
+  );
 
-        {pairing !== null ? (
-          <div className="flex flex-col gap-3">
-            <p className="font-body text-xs text-content-secondary">
-              Enter this code where you configured the AI client. It expires in 15
-              minutes.
-            </p>
-            <p className="rounded-xl border border-accent-500/30 bg-accent-500/10 py-3 text-center font-mono text-xl font-bold tracking-widest text-accent-400">
-              {pairing.code}
-            </p>
-            <div className="rounded-xl bg-surface-900 p-3">
+  // Once a relay URL exists, the remaining step lives in the AI client, so show
+  // that rather than the connection form again.
+  if (mcpUrl !== null || status?.paired === true) {
+    const chosen = CLIENTS[client];
+    const url = mcpUrl ?? '';
+    return (
+      <div className="flex flex-col gap-3">
+        <Card title="Agent">
+          {statusPill}
+          <p className="mb-3 font-body text-xs text-content-secondary">
+            Add this to {chosen.label} as a remote MCP server. It opens the right
+            settings page; paste the URL there.
+          </p>
+
+          {url.length > 0 && (
+            <div className="mb-3 rounded-xl border border-surface-700/60 bg-surface-900 p-3">
               <p className="font-body text-[10px] uppercase tracking-wide text-content-tertiary">
                 MCP server URL
               </p>
-              <p className="mt-0.5 break-all font-mono text-[11px] text-content-primary">
-                {pairing.mcpUrl}
-              </p>
+              <p className="mt-0.5 break-all font-mono text-[11px] text-content-primary">{url}</p>
             </div>
-            <Button variant="secondary" fullWidth onClick={handleDisable} disabled={busy}>
-              Disconnect
-            </Button>
-          </div>
-        ) : status?.paired === true ? (
-          <div className="flex flex-col gap-2">
-            <p className="font-body text-xs text-content-secondary">
-              Connected. The agent can request payments within your grant caps;
-              anything above your approval threshold still waits for you.
-            </p>
-            <Button variant="secondary" fullWidth onClick={handleDisable} disabled={busy}>
-              Disconnect
-            </Button>
-          </div>
-        ) : (
-          <div className="flex flex-col gap-3">
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() => setMode('relay')}
-                aria-pressed={mode === 'relay'}
-                className={`flex-1 rounded-xl border px-3 py-2 font-body text-xs ${
-                  mode === 'relay'
-                    ? 'border-accent-500 bg-accent-500/10 text-content-primary'
-                    : 'border-surface-700 text-content-secondary'
-                }`}
-              >
-                Hosted relay
-              </button>
-              <button
-                type="button"
-                onClick={() => setMode('local')}
-                aria-pressed={mode === 'local'}
-                className={`flex-1 rounded-xl border px-3 py-2 font-body text-xs ${
-                  mode === 'local'
-                    ? 'border-accent-500 bg-accent-500/10 text-content-primary'
-                    : 'border-surface-700 text-content-secondary'
-                }`}
-              >
-                Run locally
-              </button>
-            </div>
+          )}
 
-            {mode === 'relay' ? (
-              <>
-                <Input
-                  label="Relay URL"
-                  placeholder="https://relay.example"
-                  value={relayUrl}
-                  onChange={(e) => setRelayUrl(e.target.value)}
-                  disabled={busy}
-                />
-                <Button fullWidth onClick={handleRelayConnect} disabled={busy}>
-                  {busy ? 'Connecting…' : 'Connect'}
-                </Button>
-              </>
-            ) : (
-              <>
-                <Input
-                  label="Bridge port"
-                  placeholder={String(DEFAULT_PORT)}
-                  value={port}
-                  onChange={(e) => setPort(e.target.value)}
-                  disabled={busy}
-                />
-                <Input
-                  type="password"
-                  passwordToggle
-                  label="Pairing token"
-                  placeholder="Paste the token from the MCP server"
-                  value={token}
-                  onChange={(e) => setToken(e.target.value)}
-                  disabled={busy}
-                />
-                <Button fullWidth onClick={handleLocalPair} disabled={busy}>
-                  {busy ? 'Pairing…' : 'Pair bridge'}
-                </Button>
-              </>
+          <div className="flex gap-2">
+            {url.length > 0 && (
+              <Button variant="secondary" fullWidth onClick={() => void copy(url)}>
+                <Glyph name={copied ? 'check' : 'copy'} className="h-4 w-4" />
+                {copied ? 'Copied' : 'Copy URL'}
+              </Button>
             )}
+            <Button
+              variant="primary"
+              fullWidth
+              onClick={() => window.open(chosen.settingsUrl, '_blank', 'noopener,noreferrer')}
+            >
+              <Glyph name="external" className="h-4 w-4" />
+              Open {chosen.label}
+            </Button>
           </div>
+
+          <p className="mt-3 font-body text-[11px] text-content-tertiary">{chosen.hint}</p>
+          <p className="mt-2 font-body text-[11px] text-content-tertiary">
+            The client will show a sign-in page from the relay. Approving it is the
+            last step.
+          </p>
+
+          <Button variant="ghost" fullWidth className="mt-3" onClick={handleDisable} disabled={busy}>
+            Disconnect
+          </Button>
+        </Card>
+
+        <Card title="Which client?">
+          <div className="flex gap-2">
+            {(Object.keys(CLIENTS) as ClientKey[]).map((key) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setClient(key)}
+                aria-pressed={client === key}
+                className={`flex-1 rounded-xl border px-3 py-2 font-body text-xs ${
+                  client === key
+                    ? 'border-accent-500 bg-accent-500/10 text-content-primary'
+                    : 'border-surface-700 text-content-secondary'
+                }`}
+              >
+                {CLIENTS[key].label}
+              </button>
+            ))}
+          </div>
+        </Card>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-3">
+      <Card title="Agent">
+        {statusPill}
+
+        <p className="mb-3 font-body text-xs text-content-secondary">
+          Let an AI assistant pay from this wallet, within caps you set. Pick where
+          you use it.
+        </p>
+
+        <div className="mb-3 flex gap-2">
+          {(Object.keys(CLIENTS) as ClientKey[]).map((key) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => setClient(key)}
+              aria-pressed={client === key}
+              className={`flex-1 rounded-xl border px-3 py-2 font-body text-xs ${
+                client === key
+                  ? 'border-accent-500 bg-accent-500/10 text-content-primary'
+                  : 'border-surface-700 text-content-secondary'
+              }`}
+            >
+              {CLIENTS[key].label}
+            </button>
+          ))}
+        </div>
+
+        <div className="mb-3 flex gap-2">
+          <button
+            type="button"
+            onClick={() => setMode('relay')}
+            aria-pressed={mode === 'relay'}
+            className={`flex-1 rounded-xl border px-3 py-2 font-body text-xs ${
+              mode === 'relay'
+                ? 'border-accent-500 bg-accent-500/10 text-content-primary'
+                : 'border-surface-700 text-content-secondary'
+            }`}
+          >
+            Hosted relay
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode('local')}
+            aria-pressed={mode === 'local'}
+            className={`flex-1 rounded-xl border px-3 py-2 font-body text-xs ${
+              mode === 'local'
+                ? 'border-accent-500 bg-accent-500/10 text-content-primary'
+                : 'border-surface-700 text-content-secondary'
+            }`}
+          >
+            Run locally
+          </button>
+        </div>
+
+        {mode === 'relay' ? (
+          <>
+            <Input
+              label="Relay URL"
+              placeholder="https://relay.example"
+              value={relayUrl}
+              onChange={(e) => setRelayUrl(e.target.value)}
+              disabled={busy}
+            />
+            <Button className="mt-3" fullWidth onClick={handleRelayConnect} disabled={busy}>
+              {busy ? 'Connecting…' : 'Connect'}
+            </Button>
+          </>
+        ) : (
+          <>
+            <Input
+              label="Bridge port"
+              placeholder={String(DEFAULT_PORT)}
+              value={port}
+              onChange={(e) => setPort(e.target.value)}
+              disabled={busy}
+            />
+            <div className="mt-3">
+              <Input
+                type="password"
+                passwordToggle
+                label="Pairing token"
+                placeholder="Paste the token from the MCP server"
+                value={token}
+                onChange={(e) => setToken(e.target.value)}
+                disabled={busy}
+              />
+            </div>
+            <Button className="mt-3" fullWidth onClick={handleLocalPair} disabled={busy}>
+              {busy ? 'Pairing…' : 'Pair bridge'}
+            </Button>
+          </>
         )}
 
         {error !== null && <p className="mt-2 font-body text-xs text-danger">{error}</p>}

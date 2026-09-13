@@ -1550,7 +1550,7 @@ const handlers: HandlerMap = {
     const baseUrl = payload.baseUrl.replace(/\/$/, '');
     let response: Response;
     try {
-      response = await fetch(`${baseUrl}/register`, { method: 'POST' });
+      response = await fetch(`${baseUrl}/wallet/register`, { method: 'POST' });
     } catch {
       throw new ProtocolError('BAD_REQUEST', `Could not reach the relay at ${baseUrl}.`);
     }
@@ -1563,12 +1563,8 @@ const handlers: HandlerMap = {
       throw new ProtocolError('BAD_REQUEST', 'The relay returned a malformed registration.');
     }
     const record = body as Record<string, unknown>;
-    const { walletId, secret, code, expiresAt } = record;
-    if (
-      typeof walletId !== 'string' ||
-      typeof secret !== 'string' ||
-      typeof code !== 'string'
-    ) {
+    const { walletId, secret } = record;
+    if (typeof walletId !== 'string' || typeof secret !== 'string') {
       throw new ProtocolError('BAD_REQUEST', 'The relay returned an incomplete registration.');
     }
 
@@ -1582,11 +1578,11 @@ const handlers: HandlerMap = {
     await restartAgentBridge();
     void appendAudit('agent.paired', { mode: 'relay', endpoint: baseUrl });
 
+    // The wallet id rides in the path, so the URL the user pastes carries its own
+    // identity and the client's OAuth discovery does the rest — nothing to type.
     return {
-      code,
-      mcpUrl: `${baseUrl}/mcp`,
-      pairUrl: `${baseUrl}/pair`,
-      expiresAt: typeof expiresAt === 'number' ? expiresAt : Date.now() + 86_400_000,
+      mcpUrl: `${baseUrl}/mcp/${walletId}`,
+      walletId,
     };
   },
 
