@@ -37,10 +37,14 @@ export function Button({
   return (
     <button
       className={[
-        'inline-flex items-center justify-center gap-2',
+        'inline-flex select-none items-center justify-center gap-2',
         'font-body font-semibold',
-        'transition-colors duration-base',
-        'disabled:cursor-not-allowed disabled:opacity-50',
+        // One transition declaration covering colour *and* transform, so the
+        // press feedback animates smoothly instead of snapping on release.
+        'transition-all duration-base ease-out',
+        // Tactile press: the whole button settles inward slightly.
+        'active:scale-[0.97]',
+        'disabled:pointer-events-none disabled:opacity-50',
         VARIANTS[variant],
         SIZES[size],
         fullWidth ? 'w-full' : '',

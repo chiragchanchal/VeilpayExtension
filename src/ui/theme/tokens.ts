@@ -94,5 +94,11 @@ export const motion = {
   fast: '120ms',
   base: '200ms',
   slow: '320ms',
+  slower: '420ms',
+  /** Standard ease for state changes (hover, focus, color). */
   ease: 'cubic-bezier(0.4, 0, 0.2, 1)',
+  /** Exponential-out — decelerates hard. Use for entrances. */
+  easeOut: 'cubic-bezier(0.16, 1, 0.3, 1)',
+  /** Gentle overshoot for delightful, short accents. */
+  easeSpring: 'cubic-bezier(0.34, 1.56, 0.64, 1)',
 } as const;

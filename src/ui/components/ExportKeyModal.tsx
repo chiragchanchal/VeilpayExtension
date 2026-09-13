@@ -79,7 +79,7 @@ export function ExportKeyModal({
 
   if (step === 'confirm') {
     return (
-      <Card title={t('surfaces.exportKeyTitle')}>
+      <Card title={t('surfaces.exportKeyTitle')} className="animate-scale-in">
         <p className="font-body text-xs text-content-secondary mb-3">
           {t('surfaces.exportKeyConfirmBody', { chain: account.chain })}
         </p>
@@ -102,7 +102,7 @@ export function ExportKeyModal({
   }
 
   return (
-    <Card title={t('surfaces.privateKeyTitle')}>
+    <Card title={t('surfaces.privateKeyTitle')} className="animate-scale-in">
       <p className="font-body text-xs text-content-tertiary mb-3">
         {t('surfaces.keyCopiedHint')}
       </p>

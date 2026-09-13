@@ -279,14 +279,14 @@ function TransactionDetailsModal({ tx, onClose }: { tx: IndexerTx; onClose: () =
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      className="fixed inset-0 z-50 flex animate-fade-in items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
       role="dialog"
       aria-modal="true"
       aria-label="Transaction details"
       onClick={onClose}
     >
       <div
-        className="w-full max-w-md rounded-xl bg-surface-800 p-4"
+        className="w-full max-w-md animate-scale-in rounded-2xl border border-surface-600 bg-surface-800 p-4 shadow-raised"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between mb-3">

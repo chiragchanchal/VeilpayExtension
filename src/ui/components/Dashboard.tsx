@@ -235,7 +235,10 @@ export function Dashboard({
       </div>
 
       {/* Balance hero */}
-      <section className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-accent-400 via-accent-500 to-accent-700 p-4 text-surface-900 shadow-[0_10px_28px_-12px_rgba(245,158,11,0.55)]">
+      <section
+        style={{ animationDelay: '0ms' }}
+        className="relative animate-fade-in-up overflow-hidden rounded-2xl bg-gradient-to-br from-accent-400 via-accent-500 to-accent-700 p-4 text-surface-900 shadow-[0_10px_28px_-12px_rgba(245,158,11,0.55)]"
+      >
         <div aria-hidden className="pointer-events-none absolute -right-8 -top-10 h-36 w-36 rounded-full bg-white/15 blur-2xl" />
         <p className="font-body text-xs font-semibold uppercase tracking-wider text-surface-900/70">
           Total Balance
@@ -270,12 +273,12 @@ export function Dashboard({
       </section>
 
       {/* Quick actions */}
-      <div className="grid grid-cols-3 gap-2">
+      <div style={{ animationDelay: '60ms' }} className="grid animate-fade-in-up grid-cols-3 gap-2">
         <button
           type="button"
           onClick={() => { if (accounts.length > 0) onSend(0); }}
           disabled={accounts.length === 0}
-          className="flex items-center justify-center gap-1.5 rounded-xl border border-surface-700 bg-surface-800 px-2 py-2.5 font-body text-sm font-semibold text-content-primary transition-colors hover:border-accent-500/50 hover:bg-surface-700 disabled:cursor-not-allowed disabled:opacity-50"
+          className="flex items-center justify-center gap-1.5 rounded-xl border border-surface-700 bg-surface-800 px-2 py-2.5 font-body text-sm font-semibold text-content-primary transition-all duration-base ease-out hover:-translate-y-0.5 hover:border-accent-500/50 hover:bg-surface-700 active:scale-[0.97] active:translate-y-0 disabled:pointer-events-none disabled:opacity-50"
         >
           <Glyph name="send" className="h-4 w-4" />
           {t('common.send')}
@@ -284,7 +287,7 @@ export function Dashboard({
           type="button"
           onClick={() => { if (accounts.length > 0) onReceive(0); }}
           disabled={accounts.length === 0}
-          className="flex items-center justify-center gap-1.5 rounded-xl border border-surface-700 bg-surface-800 px-2 py-2.5 font-body text-sm font-semibold text-content-primary transition-colors hover:border-accent-500/50 hover:bg-surface-700 disabled:cursor-not-allowed disabled:opacity-50"
+          className="flex items-center justify-center gap-1.5 rounded-xl border border-surface-700 bg-surface-800 px-2 py-2.5 font-body text-sm font-semibold text-content-primary transition-all duration-base ease-out hover:-translate-y-0.5 hover:border-accent-500/50 hover:bg-surface-700 active:scale-[0.97] active:translate-y-0 disabled:pointer-events-none disabled:opacity-50"
         >
           <Glyph name="receive" className="h-4 w-4" />
           {t('common.receive')}
@@ -293,7 +296,7 @@ export function Dashboard({
           type="button"
           onClick={handleFaucet}
           disabled={accounts.length === 0}
-          className="flex items-center justify-center gap-1.5 rounded-xl border border-surface-700 bg-surface-800 px-2 py-2.5 font-body text-sm font-semibold text-content-primary transition-colors hover:border-accent-500/50 hover:bg-surface-700 disabled:cursor-not-allowed disabled:opacity-50"
+          className="flex items-center justify-center gap-1.5 rounded-xl border border-surface-700 bg-surface-800 px-2 py-2.5 font-body text-sm font-semibold text-content-primary transition-all duration-base ease-out hover:-translate-y-0.5 hover:border-accent-500/50 hover:bg-surface-700 active:scale-[0.97] active:translate-y-0 disabled:pointer-events-none disabled:opacity-50"
         >
           <Glyph name="droplet" className="h-4 w-4" />
           Faucet
@@ -301,68 +304,85 @@ export function Dashboard({
       </div>
 
       {/* Assets */}
-      <Card title="Assets">
-        {accounts.length === 0 ? (
-          <p className="font-body text-xs text-content-tertiary">No accounts. Import or create a wallet.</p>
-        ) : (
-          <ul className="flex flex-col gap-2">
-            {accounts.map((acc, i) => {
-              const key = `${acc.chain}:${acc.address}` as const;
-              const bal = balances[key] ?? 0n;
-              return (
-                <AssetRow
-                  key={key}
-                  account={acc}
-                  balance={bal}
-                  onSend={() => onSend(i)}
-                  onReceive={() => onReceive(i)}
-                  onExport={() => setExportAccount(acc)}
-                />
-              );
-            })}
-          </ul>
-        )}
-      </Card>
+      <div style={{ animationDelay: '120ms' }} className="animate-fade-in-up">
+        <Card title="Assets">
+          {accounts.length === 0 ? (
+            <p className="font-body text-xs text-content-tertiary">
+              No accounts. Import or create a wallet.
+            </p>
+          ) : (
+            <ul className="flex flex-col gap-2">
+              {accounts.map((acc, i) => {
+                const key = `${acc.chain}:${acc.address}` as const;
+                const bal = balances[key] ?? 0n;
+                return (
+                  <AssetRow
+                    key={key}
+                    account={acc}
+                    balance={bal}
+                    onSend={() => onSend(i)}
+                    onReceive={() => onReceive(i)}
+                    onExport={() => setExportAccount(acc)}
+                  />
+                );
+              })}
+            </ul>
+          )}
+        </Card>
+      </div>
 
       {/* Recent Transactions */}
-      <Card title="Recent Transactions">
-        {txLoading ? (
-          <p className="font-body text-xs text-content-tertiary">Loading transactions…</p>
-        ) : txs.length === 0 ? (
-          <p className="font-body text-xs text-content-tertiary">No recent transactions.</p>
-        ) : (
-          <ul className="flex flex-col gap-2">
-            {txs.map((tx, i) => (
-              <li
-                key={`${tx.hash}-${i}`}
-                className="flex items-center justify-between rounded-xl border border-surface-700/70 bg-surface-800/60 px-3 py-2"
-              >
-                <div className="flex min-w-0 flex-1 flex-col">
-                  <span className="inline-flex items-center gap-1 font-mono text-xs text-content-primary">
-                    {tx.chain}
-                    {tx.status === 'confirmed' ? (
-                      <Glyph name="check" className="h-3.5 w-3.5 text-success" />
-                    ) : tx.status === 'pending' ? (
-                      <Glyph name="spinner" className="h-3.5 w-3.5 animate-spin text-content-secondary" />
-                    ) : (
-                      <Glyph name="alert" className="h-3.5 w-3.5 text-error" />
-                    )}
-                  </span>
-                  <span className="truncate font-mono text-[10px] text-content-tertiary">
-                    {tx.from.slice(0, 8)}… → {tx.to.slice(0, 8)}…
-                  </span>
-                </div>
-                <div className="ml-2 flex shrink-0 flex-col items-end">
-                  <span className="font-mono text-xs text-content-secondary">
-                    {formatBalance(BigInt(tx.amount), tx.chain)}
-                  </span>
-                  <span className="font-mono text-[10px] text-content-tertiary">{formatTime(tx.timestamp)}</span>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </Card>
+      <div style={{ animationDelay: '180ms' }} className="animate-fade-in-up">
+        <Card title="Recent Transactions">
+          {txLoading ? (
+            <ul className="flex flex-col gap-2" aria-busy="true">
+              {[0, 1, 2].map((i) => (
+                <li
+                  key={i}
+                  className="relative h-12 overflow-hidden rounded-xl border border-surface-700/70 bg-surface-800/60"
+                >
+                  <span className="absolute inset-0 -translate-x-full animate-shimmer bg-gradient-to-r from-transparent via-white/5 to-transparent" />
+                </li>
+              ))}
+            </ul>
+          ) : txs.length === 0 ? (
+            <p className="font-body text-xs text-content-tertiary">No recent transactions.</p>
+          ) : (
+            <ul className="flex flex-col gap-2">
+              {txs.map((tx, i) => (
+                <li
+                  key={`${tx.hash}-${i}`}
+                  className="flex items-center justify-between rounded-xl border border-surface-700/70 bg-surface-800/60 px-3 py-2 transition-colors hover:border-surface-600"
+                >
+                  <div className="flex min-w-0 flex-1 flex-col">
+                    <span className="inline-flex items-center gap-1 font-mono text-xs text-content-primary">
+                      {tx.chain}
+                      {tx.status === 'confirmed' ? (
+                        <Glyph name="check" className="h-3.5 w-3.5 text-success" />
+                      ) : tx.status === 'pending' ? (
+                        <Glyph name="spinner" className="h-3.5 w-3.5 animate-spin text-content-secondary" />
+                      ) : (
+                        <Glyph name="alert" className="h-3.5 w-3.5 text-error" />
+                      )}
+                    </span>
+                    <span className="truncate font-mono text-[10px] text-content-tertiary">
+                      {tx.from.slice(0, 8)}… → {tx.to.slice(0, 8)}…
+                    </span>
+                  </div>
+                  <div className="ml-2 flex shrink-0 flex-col items-end">
+                    <span className="font-mono text-xs text-content-secondary">
+                      {formatBalance(BigInt(tx.amount), tx.chain)}
+                    </span>
+                    <span className="font-mono text-[10px] text-content-tertiary">
+                      {formatTime(tx.timestamp)}
+                    </span>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+      </div>
 
       {exportAccount !== null && (
         <ExportKeyModal account={exportAccount} onClose={() => setExportAccount(null)} />

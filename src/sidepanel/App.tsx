@@ -224,7 +224,10 @@ export default function SidePanelApp() {
 
   return (
     <div className="flex min-h-screen flex-col">
-      <div className="flex-1 overflow-y-auto p-4">
+      {/* Keyed by tab so switching tabs fades the new panel in instead of
+          swapping instantly. The animation runs on each tab change because the
+          key change remounts the wrapper. */}
+      <div key={activeTab} className="flex-1 animate-fade-in overflow-y-auto p-4">
         {activeTab === 'wallet' && (
           <div className="flex flex-col gap-3">
             {header}
@@ -266,7 +269,7 @@ export default function SidePanelApp() {
             type="button"
             onClick={() => setActiveTab(tab.key)}
             aria-current={activeTab === tab.key ? 'page' : undefined}
-            className={`flex flex-1 flex-col items-center gap-1 rounded-xl px-2 py-2 font-body text-[11px] transition-all ${
+            className={`flex flex-1 flex-col items-center gap-1 rounded-xl px-2 py-2 font-body text-[11px] transition-all duration-base ease-out active:scale-95 ${
               activeTab === tab.key
                 ? 'bg-accent-500/15 font-semibold text-accent-400'
                 : 'text-content-tertiary hover:bg-surface-700 hover:text-content-secondary'

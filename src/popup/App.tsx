@@ -92,6 +92,12 @@ export default function App() {
   const [passphraseError, setPassphraseError] = useState<string | null>(null);
   const [unlockPassphrase, setUnlockPassphrase] = useState('');
   const [unlockError, setUnlockError] = useState<string | null>(null);
+  /**
+   * Bumped on every failed unlock so the shake animation replays. React reuses
+   * the DOM node otherwise, and re-applying the same class to an unchanged
+   * element does not restart a CSS animation — changing the key remounts it.
+   */
+  const [unlockAttempt, setUnlockAttempt] = useState(0);
   const [resetConfirm, setResetConfirm] = useState(false);
 
   // Send / receive / import view
@@ -292,6 +298,7 @@ export default function App() {
     if (!ok) {
       setUnlockError('Wrong passphrase. Try again.');
       setUnlockPassphrase('');
+      setUnlockAttempt((attempt) => attempt + 1);
     }
   };
 
@@ -596,36 +603,49 @@ export default function App() {
   // ── Locked — unlock screen ──────────────────────────────────────────────
   if (vaultState === 'locked') {
     return (
-      <main className="flex min-h-[600px] w-[400px] flex-col gap-4 p-4">
-        <header className="flex items-baseline justify-between">
-          <h1 className="font-display text-lg font-bold text-content-primary">{t('brand')}</h1>
-          <span className="font-mono text-xs text-content-tertiary">{t('version')}</span>
+      <main className="flex min-h-[600px] w-[400px] animate-fade-in flex-col gap-4 p-4">
+        <header className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <BrandLogo size="md" />
+            <h1 className="font-display text-lg font-bold text-content-primary">{t('brand')}</h1>
+          </div>
+          <span className="rounded-full border border-surface-600 px-2 py-0.5 font-mono text-[10px] text-content-tertiary">
+            {t('version')}
+          </span>
         </header>
 
         <div className="flex flex-1 flex-col items-center justify-center gap-4">
-          <div className="flex h-12 w-12 items-center justify-center rounded-full bg-surface-700">
-            <Icon name="lock" className="h-6 w-6" />
+          <div className="relative flex h-14 w-14 items-center justify-center">
+            <span aria-hidden className="absolute inset-0 animate-pulse-ring rounded-full bg-accent-500/25" />
+            <div className="relative flex h-12 w-12 animate-pop-in items-center justify-center rounded-2xl border border-surface-600 bg-surface-700">
+              <Icon name="lock" className="h-6 w-6" />
+            </div>
           </div>
           <p className="font-body text-sm text-content-secondary">{t('wallet.locked')}</p>
 
-          <div className="w-full max-w-xs">
-            <Input
-              type="password"
-              label={t('wallet.passphrase')}
-              placeholder={t('wallet.passphrase')}
-              value={unlockPassphrase}
-              onChange={(e) => {
-                setUnlockPassphrase(e.target.value);
-                setUnlockError(null);
-              }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') void handleUnlock();
-              }}
-              error={unlockError ?? null}
-              passwordToggle
-              autoFocus
-              disabled={isLoading}
-            />
+          <div className="w-full max-w-xs animate-fade-in-up">
+            <div
+              key={unlockAttempt}
+              className={unlockError !== null ? 'animate-shake' : undefined}
+            >
+              <Input
+                type="password"
+                label={t('wallet.passphrase')}
+                placeholder={t('wallet.passphrase')}
+                value={unlockPassphrase}
+                onChange={(e) => {
+                  setUnlockPassphrase(e.target.value);
+                  setUnlockError(null);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') void handleUnlock();
+                }}
+                error={unlockError ?? null}
+                passwordToggle
+                autoFocus
+                disabled={isLoading}
+              />
+            </div>
           </div>
 
           <Button
@@ -1066,10 +1086,10 @@ function SendForm({
   }
 
   return (
-    <main className="flex min-h-[600px] w-[400px] flex-col gap-4 p-4">
+    <main className="flex min-h-[600px] w-[400px] animate-fade-in flex-col gap-4 p-4">
       <header className="flex items-baseline justify-between">
-        <h1 className="font-display text-lg font-bold text-content-primary">Veilpay</h1>
-        <span className="font-mono text-xs text-content-tertiary">v0.0.1</span>
+        <h1 className="font-display text-lg font-bold text-content-primary">{t('brand')}</h1>
+        <span className="font-mono text-xs text-content-tertiary">{t('version')}</span>
       </header>
 
       <p className="font-body text-xs text-content-secondary">
@@ -1299,7 +1319,7 @@ function ReceiveView({
   };
 
   return (
-    <main className="flex min-h-[600px] w-[400px] flex-col gap-4 p-4">
+    <main className="flex min-h-[600px] w-[400px] animate-fade-in flex-col gap-4 p-4">
       <header className="flex items-baseline justify-between">
         <h1 className="font-display text-lg font-bold text-content-primary">Veilpay</h1>
         <span className="font-mono text-xs text-content-tertiary">v0.0.1</span>
