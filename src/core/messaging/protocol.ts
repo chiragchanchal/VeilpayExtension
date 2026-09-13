@@ -85,6 +85,7 @@ export const RequestKind = z.enum([
   'wc.request.resolve',
   'agent.status',
   'agent.configure',
+  'agent.relay.register',
   'agent.disable',
 ]);
 export type RequestKind = z.infer<typeof RequestKind>;
@@ -157,6 +158,7 @@ export const PRIVILEGED_KINDS: readonly RequestKind[] = [
   // is privileged exactly like `vap.grant.resolve` — only our own UI may set it,
   // never a page, content script, or the offscreen document.
   'agent.configure',
+  'agent.relay.register',
   'agent.disable',
 ] as const;
 
@@ -778,10 +780,25 @@ export const AgentStatusRequest = baseEnvelope.extend({
 export const AgentConfigureRequest = baseEnvelope.extend({
   kind: z.literal('agent.configure'),
   payload: z.object({
-    port: z.number().int().positive().max(65535),
-    /** The pairing token printed by the MCP server. Bounded to avoid storing a
-     *  page-sized blob. */
+    mode: z.enum(['local', 'relay']),
+    /** Origin only: `http://127.0.0.1:8765` or `https://relay.example`. */
+    baseUrl: z.string().min(1).max(2048),
+    /** Local: pairing token. Relay: the wallet secret issued at registration. */
     token: z.string().min(16).max(256),
+    /** Relay only: identifies this wallet's queue on the server. */
+    walletId: z.string().min(1).max(128).optional(),
+  }),
+});
+
+/**
+ * Registers this wallet with a relay. The relay answers with a short pairing
+ * code the user enters where they configured the AI client, plus the wallet
+ * secret this extension stores for the connection.
+ */
+export const AgentRelayRegisterRequest = baseEnvelope.extend({
+  kind: z.literal('agent.relay.register'),
+  payload: z.object({
+    baseUrl: z.string().min(1).max(2048),
   }),
 });
 
@@ -847,6 +864,7 @@ export const Request = z.discriminatedUnion('kind', [
   WcRequestResolveRequest,
   AgentStatusRequest,
   AgentConfigureRequest,
+  AgentRelayRegisterRequest,
   AgentDisableRequest,
 ]);
 export type Request = z.infer<typeof Request>;
@@ -1138,17 +1156,27 @@ export interface ResponseData {
   'wc.request.resolve': { ok: boolean };
   /** Agent bridge pairing state. Never returns the token itself. */
   'agent.status': {
-    /** True once a token and port are stored. */
+    /** True once a token and endpoint are stored. */
     enabled: boolean;
-    port: number | null;
-    /** Mirrors `enabled`, for surfacing without leaking the secret. */
+    mode: 'local' | 'relay' | null;
+    /** The endpoint the extension polls (port implied for local). */
+    endpoint: string | null;
     paired: boolean;
-    /** Whether the MCP server answered the most recent poll. */
+    /** Whether the bridge answered the most recent poll. */
     connected: boolean;
     /** Epoch ms of the last successful poll, or null. */
     lastPollAt: number | null;
   };
   'agent.configure': { ok: boolean };
+  /** Relay registration: the code to enter on the AI-client side. */
+  'agent.relay.register': {
+    code: string;
+    /** The URL the user adds as the remote MCP server. */
+    mcpUrl: string;
+    /** The URL where the code is entered. */
+    pairUrl: string;
+    expiresAt: number;
+  };
   'agent.disable': { ok: boolean };
 }
 

@@ -22,17 +22,41 @@ export const POLL_TIMEOUT_MS = 25_000;
 export const RETRY_DELAY_MS = 3_000;
 
 export interface AgentBridgeConfig {
-  port: number;
   /**
-   * The pairing token. This is a bearer credential: anything that reads it can
-   * drive the wallet within the user's grant caps. It lives in
-   * `chrome.storage.local`, which is unencrypted on disk — acceptable because it
-   * grants only local access that is further bounded by grants, but it is why
-   * the token is never returned over the message bus or shown in logs.
+   * `local` talks to the MCP server the user runs; `relay` talks to a hosted
+   * server the user does not run. Both speak the same /next + /result protocol,
+   * so only the base URL and auth headers differ.
+   */
+  mode: 'local' | 'relay';
+  /** Origin only, e.g. `http://127.0.0.1:8765` or `https://relay.example`. */
+  baseUrl: string;
+  /**
+   * A bearer credential: anything that reads it can drive the wallet within the
+   * user's grant caps. It lives in `chrome.storage.local`, which is unencrypted
+   * on disk — acceptable only because grants bound what it can do, and why it is
+   * never returned over the message bus or written to logs.
    */
   token: string;
+  /** Relay only: identifies this wallet's queue on the server. */
+  walletId?: string;
   /** Epoch ms when the user paired. */
   pairedAt: number;
+}
+
+/**
+ * Auth headers for the configured transport.
+ *
+ * Kept in one place so a relay request can never accidentally be sent with the
+ * local header (or vice versa), which would fail closed but confusingly.
+ */
+function authHeaders(config: AgentBridgeConfig): Record<string, string> {
+  if (config.mode === 'relay') {
+    return {
+      'x-veilpay-wallet': config.walletId ?? '',
+      'x-veilpay-secret': config.token,
+    };
+  }
+  return { 'x-veilpay-token': config.token };
 }
 
 export async function loadAgentBridgeConfig(): Promise<AgentBridgeConfig | null> {
@@ -40,12 +64,27 @@ export async function loadAgentBridgeConfig(): Promise<AgentBridgeConfig | null>
   const value = stored[STORAGE_KEY];
   if (typeof value !== 'object' || value === null) return null;
   const record = value as Record<string, unknown>;
-  if (typeof record.port !== 'number' || typeof record.token !== 'string') return null;
-  return {
-    port: record.port,
+  if (typeof record.token !== 'string') return null;
+
+  // Legacy shape from before the relay existed: { port, token }.
+  if (typeof record.baseUrl !== 'string') {
+    if (typeof record.port !== 'number') return null;
+    return {
+      mode: 'local',
+      baseUrl: `http://127.0.0.1:${record.port}`,
+      token: record.token,
+      pairedAt: typeof record.pairedAt === 'number' ? record.pairedAt : 0,
+    };
+  }
+
+  const config: AgentBridgeConfig = {
+    mode: record.mode === 'relay' ? 'relay' : 'local',
+    baseUrl: record.baseUrl,
     token: record.token,
     pairedAt: typeof record.pairedAt === 'number' ? record.pairedAt : 0,
   };
+  if (typeof record.walletId === 'string') config.walletId = record.walletId;
+  return config;
 }
 
 export async function saveAgentBridgeConfig(config: AgentBridgeConfig): Promise<void> {
@@ -56,9 +95,6 @@ export async function clearAgentBridgeConfig(): Promise<void> {
   await chrome.storage.local.remove(STORAGE_KEY);
 }
 
-function baseUrl(config: AgentBridgeConfig): string {
-  return `http://127.0.0.1:${config.port}`;
-}
 
 export interface BridgeRequest {
   id: string;
@@ -81,8 +117,8 @@ export async function pollOnce(
 ): Promise<{ connected: boolean; handled: boolean }> {
   let response: Response;
   try {
-    response = await fetchImpl(`${baseUrl(config)}/next`, {
-      headers: { 'x-veilpay-token': config.token },
+    response = await fetchImpl(`${config.baseUrl}/next`, {
+      headers: authHeaders(config),
       ...(signal !== undefined ? { signal } : {}),
     });
   } catch {
@@ -131,11 +167,11 @@ export async function pollOnce(
   }
 
   try {
-    await fetchImpl(`${baseUrl(config)}/result`, {
+    await fetchImpl(`${config.baseUrl}/result`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        'x-veilpay-token': config.token,
+        ...authHeaders(config),
       },
       body: JSON.stringify(payload),
       ...(signal !== undefined ? { signal } : {}),

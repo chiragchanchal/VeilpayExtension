@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import { pollOnce, type AgentBridgeConfig, type BridgeRequest } from '@/background/agent-bridge';
 
-const CONFIG: AgentBridgeConfig = { port: 8765, token: 'token-abc', pairedAt: 0 };
+const CONFIG: AgentBridgeConfig = {
+  mode: 'local',
+  baseUrl: 'http://127.0.0.1:8765',
+  token: 'token-abc',
+  pairedAt: 0,
+};
 
 /** A fetch stub that returns queued responses in order. */
 function fetchQueue(responses: (Response | Error)[]) {

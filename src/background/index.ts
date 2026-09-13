@@ -1527,14 +1527,67 @@ const handlers: HandlerMap = {
    * user's grant caps without a per-payment prompt.
    */
   'agent.configure': async (payload) => {
-    await saveAgentBridgeConfig({
-      port: payload.port,
+    const config: Parameters<typeof saveAgentBridgeConfig>[0] = {
+      mode: payload.mode,
+      baseUrl: payload.baseUrl.replace(/\/$/, ''),
       token: payload.token,
+      pairedAt: Date.now(),
+    };
+    if (payload.walletId !== undefined) config.walletId = payload.walletId;
+    await saveAgentBridgeConfig(config);
+    await restartAgentBridge();
+    void appendAudit('agent.paired', { mode: payload.mode, endpoint: config.baseUrl });
+    return { ok: true };
+  },
+
+  /**
+   * Registers this wallet with a relay and starts polling it.
+   *
+   * The relay issues a wallet secret (stored here, never returned) and a short
+   * pairing code (returned for the user to enter on the AI-client side).
+   */
+  'agent.relay.register': async (payload) => {
+    const baseUrl = payload.baseUrl.replace(/\/$/, '');
+    let response: Response;
+    try {
+      response = await fetch(`${baseUrl}/register`, { method: 'POST' });
+    } catch {
+      throw new ProtocolError('BAD_REQUEST', `Could not reach the relay at ${baseUrl}.`);
+    }
+    if (!response.ok) {
+      throw new ProtocolError('BAD_REQUEST', `The relay refused registration (HTTP ${response.status}).`);
+    }
+
+    const body = (await response.json()) as unknown;
+    if (typeof body !== 'object' || body === null) {
+      throw new ProtocolError('BAD_REQUEST', 'The relay returned a malformed registration.');
+    }
+    const record = body as Record<string, unknown>;
+    const { walletId, secret, code, expiresAt } = record;
+    if (
+      typeof walletId !== 'string' ||
+      typeof secret !== 'string' ||
+      typeof code !== 'string'
+    ) {
+      throw new ProtocolError('BAD_REQUEST', 'The relay returned an incomplete registration.');
+    }
+
+    await saveAgentBridgeConfig({
+      mode: 'relay',
+      baseUrl,
+      token: secret,
+      walletId,
       pairedAt: Date.now(),
     });
     await restartAgentBridge();
-    void appendAudit('agent.paired', { port: payload.port });
-    return { ok: true };
+    void appendAudit('agent.paired', { mode: 'relay', endpoint: baseUrl });
+
+    return {
+      code,
+      mcpUrl: `${baseUrl}/mcp`,
+      pairUrl: `${baseUrl}/pair`,
+      expiresAt: typeof expiresAt === 'number' ? expiresAt : Date.now() + 86_400_000,
+    };
   },
 
   'agent.disable': async () => {
@@ -2198,7 +2251,8 @@ async function agentBridgeStatus() {
   const config = await loadAgentBridgeConfig();
   return {
     enabled: config !== null,
-    port: config?.port ?? null,
+    mode: config?.mode ?? null,
+    endpoint: config?.baseUrl ?? null,
     paired: config !== null,
     connected: agentLoop?.connected() ?? false,
     lastPollAt: agentLoop?.lastPollAt() ?? null,

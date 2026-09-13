@@ -1,10 +1,20 @@
 # Paying with an AI agent
 
 Goal: a user types *"send 1 SOL to `<address>`"* into Claude and the wallet
-executes it. Free, local, no accounts, no hosting.
+executes it.
 
 This document records the design as it was refined, including the options that
 were rejected and why, because the rejections carry the security reasoning.
+
+Two transports ship, and the difference is *who runs the server*:
+
+| Mode | Setup for the user | Who hosts |
+| --- | --- | --- |
+| **Local** (`mcp/`) | run a Node command, paste a token | the user |
+| **Relay** (`relay/`) | click Connect, sign in once | whoever deploys `relay/` |
+
+The relay is the answer to "I don't want to run anything". See
+[Zero-setup via a hosted relay](#zero-setup-via-a-hosted-relay).
 
 ---
 
@@ -94,6 +104,75 @@ Accepted in principle, hardened in practice:
 
 ---
 
+## Zero-setup via a hosted relay
+
+The local design above still asks the user to run a Node process and copy a
+token. That is fine for a developer and wrong for everyone else. But the AI host
+must be able to *reach* something, and an extension can never be that something —
+so "just authenticate" requires a server with a public URL.
+
+### Iteration 6 — hosted relay, extension dials out
+
+`relay/server.mjs` is a deployable server with two faces:
+
+- `/mcp` — a remote MCP endpoint. The user adds **one URL** to Claude and
+  signs in with a device code. No local install at all.
+- `/wallet` — a WebSocket the extension connects *out* to. Outbound-only from
+  the browser's side, so no port, no tunnel, no localhost.
+
+The relay pairs the two by an opaque wallet id. A tool call on `/mcp` is pushed
+down the wallet's socket; the result comes back up the same socket.
+
+### Iteration 7 — assume the relay is hostile
+
+A hosted relay sits in the middle of every payment request, so it must be
+assumed to be curious, buggy, or even malicious. The design treats it as
+**untrusted**, which is what makes it acceptable for a third party to operate:
+
+- It never holds key material, and cannot sign anything.
+- It cannot forge a payment the user did not authorise, because the caps and the
+  approval prompt are enforced **inside the extension** — the relay can only
+  *ask*. A compromised relay is limited to spamming requests, which the prompt
+  limiter and the user's own caps bound.
+- It sees request metadata (amount, recipient) because it routes it. That is a
+  real privacy cost, and the honest one to state: the relay learns what you pay.
+  Running the local mode avoids it entirely.
+- Wallet ids and device codes are random and short-lived; the wallet's socket is
+  authenticated with a secret only the extension and the pairing response know.
+
+### Iteration 8 — pairing without typing a token
+
+Device-authorisation flow, the same shape as logging a TV into a streaming
+service:
+
+1. Extension opens the relay and receives a **wallet id** and a short
+   **pairing code** (`ABCD-1234`).
+2. User adds the relay URL to Claude as a remote MCP server.
+3. Claude initiates OAuth; the relay shows a page asking for the pairing code.
+4. User types the code once. The relay binds the MCP session to that wallet's
+   socket and issues an access token.
+
+After step 4 the connection is durable: Claude reconnects with its token, the
+extension reconnects with its wallet secret, and no one types anything again.
+
+### What the user actually does
+
+1. Install the extension (already true).
+2. Click **Connect to Claude** in Settings → Agent. Get a code.
+3. Paste the relay URL into Claude once, and enter the code.
+
+That is the whole setup. No Node, no `npm`, no token to copy by hand.
+
+### Honest limitation
+
+Shipping this needs someone to **deploy `relay/` and own a domain**. That is a
+real cost (a few dollars a month, or a free tier) and a real trust decision —
+whoever runs the relay sees payment metadata. Nothing in this repository can
+substitute for that, and I cannot deploy it for you. The code is written so the
+operator can be anyone, including yourself.
+
+---
+
 ## What this can and cannot do
 
 **Read this before trusting it.**
@@ -130,6 +209,8 @@ Sepolia / Solana devnet / Stellar testnet
 
 ## Wire contract
 
+Local bridge:
+
 `GET /health` — unauthenticated. `{ ok, version, extensionConnected }`.
 
 `GET /next` — long-poll, requires `x-veilpay-token`. Returns `{ id, tool, args }`
@@ -137,4 +218,16 @@ or `204` on timeout (25 s).
 
 `POST /result` — requires the token. `{ id, ok, data?, error? }`.
 
-Tools: `status`, `accounts`, `balance`, `send`, `grants.list`, `grants.revoke`.
+Relay:
+
+`GET /pair` — creates a wallet id and pairing code. Returns
+`{ walletId, code, expiresAt }`.
+
+`WS /wallet?walletId=…&secret=…` — the extension's socket. Messages are
+`{ id, tool, args }` down and `{ id, ok, data?, error? }` up.
+
+`POST /mcp` — remote MCP (JSON-RPC) for the AI host, authenticated by the
+access token issued during pairing.
+
+Tools on both: `status`, `accounts`, `balance`, `send`, `grants.list`,
+`grants.revoke`.

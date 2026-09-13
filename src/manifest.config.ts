@@ -82,10 +82,15 @@ export default defineManifest({
     'https://horizon-testnet.stellar.org/*',
     'https://friendbot.stellar.org/*', // testnet faucet (Stellar SDF)
     'https://veilpay-qzz1.onrender.com/*', // transaction indexer backend
-    // The agent bridge. Loopback only, and every request carries a pairing
-    // token, so this grants no access to anything off this machine.
+    // The local agent bridge. Loopback only, and every request carries a
+    // pairing token, so this grants no access to anything off this machine.
     'http://127.0.0.1/*',
   ],
+
+  // A hosted agent relay is a user-supplied https origin. Granting every site
+  // up front would defeat the point of keeping permissions minimal, so the
+  // origin is requested at the moment of pairing and only for that origin.
+  optional_host_permissions: ['https://*/*'],
 
   content_security_policy: {
     // 'wasm-unsafe-eval' is the whole question behind D3. No 'unsafe-eval'.

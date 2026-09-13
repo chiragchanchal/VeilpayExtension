@@ -430,6 +430,12 @@ export async function dispatch(
           ok: true,
           data: await handlers['agent.configure'](request.payload, ctx),
         };
+      case 'agent.relay.register':
+        return {
+          id: request.id,
+          ok: true,
+          data: await handlers['agent.relay.register'](request.payload, ctx),
+        };
       case 'agent.disable':
         return {
           id: request.id,
